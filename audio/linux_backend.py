@@ -86,9 +86,54 @@ class LinuxAudioCapture(SystemAudioCapture):
             logger.warning("Failed to start sounddevice capture: %s", e)
             return False
 
+    def _start_pw_record(self) -> bool:
+        """Capture via native PipeWire pw-record CLI."""
+        import shutil
+
+        if not shutil.which("pw-record"):
+            return False
+
+        cmd = [
+            "pw-record",
+            "--format",
+            "s16",
+            "--rate",
+            str(self.sample_rate),
+            "--channels",
+            str(self.channels),
+            "-",
+        ]
+
+        try:
+            self._process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                bufsize=self.chunk_size,
+            )
+
+            def reader():
+                while self._is_active and self._process and self._process.poll() is None:
+                    data = self._process.stdout.read(self.chunk_size)
+                    if data:
+                        self._current_volume = self.calculate_rms(data)
+                        try:
+                            self._queue.put(data, timeout=0.1)
+                        except queue.Full:
+                            pass
+                    else:
+                        break
+
+            self._thread = threading.Thread(target=reader, daemon=True)
+            self._thread.start()
+            self._backend_method = "pw-record"
+            return True
+        except Exception as e:
+            logger.debug("pw-record subprocess failed: %s", e)
+            return False
+
     def _start_parec(self) -> bool:
-        """Fallback: capture via parec or pw-record subprocess."""
-        # Check pw-record first if pipewire
+        """Fallback: capture via parec or pulseaudio subprocess."""
         cmd = [
             "parec",
             "--format=s16le",
@@ -135,19 +180,24 @@ class LinuxAudioCapture(SystemAudioCapture):
 
         self._is_active = True
 
-        # Try sounddevice first
+        # 1. Try sounddevice if portaudio is available
         dev_idx = self._find_monitor_device_sounddevice()
         if dev_idx is not None and self._start_sounddevice(dev_idx):
             logger.info("LinuxAudioCapture started with sounddevice")
             return
 
-        # Fallback to parec
+        # 2. Try native PipeWire pw-record
+        if self._start_pw_record():
+            logger.info("LinuxAudioCapture started with PipeWire pw-record")
+            return
+
+        # 3. Try PulseAudio parec
         if self._start_parec():
             logger.info("LinuxAudioCapture started with parec subprocess")
             return
 
         logger.warning(
-            "Neither sounddevice nor parec monitor capture succeeded. "
+            "Neither sounddevice nor pw-record nor parec capture succeeded. "
             "System audio may not be audible or running in a container without PulseAudio/PipeWire."
         )
 
