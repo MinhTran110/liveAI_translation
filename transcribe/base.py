@@ -69,9 +69,11 @@ class MockTranscriber(TranscriberBase):
         language: str = "multi",
         script: Optional[List[TranscriptSegment]] = None,
         emit_interval: float = 1.5,
+        auto_emit: bool = False,
     ):
         super().__init__(sample_rate, language)
         self.emit_interval = emit_interval
+        self.auto_emit = auto_emit
         self._task: Optional[asyncio.Task] = None
         self._script = script or [
             TranscriptSegment(
@@ -106,7 +108,8 @@ class MockTranscriber(TranscriberBase):
 
     async def start(self) -> None:
         self._is_running = True
-        self._task = asyncio.create_task(self._emit_loop())
+        if self.auto_emit:
+            self._task = asyncio.create_task(self._emit_loop())
 
     async def stop(self) -> None:
         self._is_running = False

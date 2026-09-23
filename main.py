@@ -110,16 +110,16 @@ def init_transcriber(
 ) -> TranscriberBase:
     """Instantiate appropriate speech-to-text transcriber."""
     if demo or provider == "mock":
-        logger.info("Initializing MockTranscriber for demonstration/testing.")
-        return MockTranscriber(sample_rate=config.sample_rate, language=config.source_language)
+        logger.info("Initializing MockTranscriber for demonstration/testing (auto_emit=%s).", demo)
+        return MockTranscriber(sample_rate=config.sample_rate, language=config.source_language, auto_emit=demo)
 
     if provider == "deepgram":
         if not config.deepgram_api_key:
             logger.warning(
-                "DEEPGRAM_API_KEY is not set in .env! Falling back to MockTranscriber. "
+                "DEEPGRAM_API_KEY is not set in .env! Staying silent until configured. "
                 "Add your Deepgram key to .env for real cloud transcription."
             )
-            return MockTranscriber(sample_rate=config.sample_rate, language=config.source_language)
+            return MockTranscriber(sample_rate=config.sample_rate, language=config.source_language, auto_emit=False)
 
         logger.info("Initializing DeepgramStreamingTranscriber (Nova-2)...")
         return DeepgramStreamingTranscriber(
@@ -146,10 +146,10 @@ def init_transcriber(
         )
     except ImportError:
         logger.warning(
-            "faster-whisper is not installed. Falling back to MockTranscriber. "
+            "faster-whisper is not installed. Staying silent until installed. "
             "Install faster-whisper via: pip install faster-whisper"
         )
-        return MockTranscriber(sample_rate=config.sample_rate, language=config.source_language)
+        return MockTranscriber(sample_rate=config.sample_rate, language=config.source_language, auto_emit=False)
 
 
 async def async_main(
@@ -294,6 +294,19 @@ def main() -> None:
         translator=translator,
         render_callback=terminal_window.render,
     )
+
+    if args.demo:
+        terminal_window.render(
+            "Demo",
+            "Đang chạy kịch bản hội thoại mẫu (giả lập) để thử nghiệm giao diện và màu sắc speaker...",
+            "Running simulated demo script for testing UI and speaker colors.",
+        )
+    else:
+        terminal_window.render(
+            "System",
+            "Sẵn sàng! Đang lắng nghe âm thanh phát ra từ hệ thống (Chrome/YouTube/VLC)...",
+            "Ready! Listening to system audio output. Play any video to see live subtitles.",
+        )
 
     # If headless requested, or running in an environment without working display
     is_headless = args.headless or (not can_display_gui())
