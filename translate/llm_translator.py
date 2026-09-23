@@ -177,6 +177,12 @@ class LLMTranslator:
             return phrases[lower]
         return f"[Dịch ({self.target_language})]: {text}"
 
+    def set_target_language(self, new_lang: str) -> None:
+        """Update target translation language at runtime."""
+        self.target_language = new_lang.lower().strip()
+        logger.info("Updated translation target language to: %s", self.target_language)
+
     def clear_context(self) -> None:
         """Reset conversation context history."""
         self.history.clear()
+

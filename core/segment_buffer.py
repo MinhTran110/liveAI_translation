@@ -35,7 +35,7 @@ class SegmentBuffer:
         self,
         min_words: int = 5,
         max_words: int = 25,
-        max_wait_seconds: float = 2.5,
+        max_wait_seconds: float = 1.5,
     ):
         self.min_words = max(1, min_words)
         self.max_words = max(self.min_words, max_words)

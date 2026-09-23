@@ -46,6 +46,8 @@ class DeepgramStreamingTranscriber(TranscriberBase):
             "channels": 1,
             "punctuate": str(self.punctuate).lower(),
             "diarize": str(self.diarize).lower(),
+            "smart_format": "true",
+            "numerals": "true",
             "interim_results": str(self.interim_results).lower(),
         }
         if self.language:

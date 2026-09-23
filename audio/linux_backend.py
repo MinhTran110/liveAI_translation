@@ -60,14 +60,16 @@ class LinuxAudioCapture(SystemAudioCapture):
             def audio_callback(indata, frames, time_info, status):
                 if status:
                     logger.debug("Audio status: %s", status)
+                chunk = bytes(indata)
+                self._current_volume = self.calculate_rms(chunk)
                 try:
-                    self._queue.put_nowait(bytes(indata))
+                    self._queue.put_nowait(chunk)
                 except queue.Full:
                     try:
                         self._queue.get_nowait()
                     except queue.Empty:
                         pass
-                    self._queue.put_nowait(bytes(indata))
+                    self._queue.put_nowait(chunk)
 
             self._stream = sd.RawInputStream(
                 samplerate=self.sample_rate,
@@ -86,6 +88,7 @@ class LinuxAudioCapture(SystemAudioCapture):
 
     def _start_parec(self) -> bool:
         """Fallback: capture via parec or pw-record subprocess."""
+        # Check pw-record first if pipewire
         cmd = [
             "parec",
             "--format=s16le",
@@ -109,6 +112,7 @@ class LinuxAudioCapture(SystemAudioCapture):
                 while self._is_active and self._process and self._process.poll() is None:
                     data = self._process.stdout.read(self.chunk_size)
                     if data:
+                        self._current_volume = self.calculate_rms(data)
                         try:
                             self._queue.put(data, timeout=0.1)
                         except queue.Full:

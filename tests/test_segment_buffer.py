@@ -116,3 +116,41 @@ def test_flush():
     assert flushed.speaker == 2
     assert flushed.text == "trailing unfinished sentence"
     assert not buf.has_content
+
+
+def test_speaker_return_preserves_identity():
+    """Verify that when Speaker 0 speaks, then Speaker 1, then Speaker 0 returns, identities are preserved."""
+    buf = SegmentBuffer(min_words=2, max_words=20, max_wait_seconds=1.5)
+
+    # 1. Speaker 0 speaks
+    seg0_1 = TranscriptSegment(speaker=0, text="Hello this is speaker zero.", is_final=True, start=0.0, end=1.5)
+    res0_1 = buf.add_transcript(seg0_1, current_time=1.5)
+    assert len(res0_1) == 1
+    assert res0_1[0].speaker == 0
+
+    # 2. Speaker 1 speaks
+    seg1 = TranscriptSegment(speaker=1, text="Hi I am speaker one.", is_final=True, start=2.0, end=3.5)
+    res1 = buf.add_transcript(seg1, current_time=3.5)
+    assert len(res1) == 1
+    assert res1[0].speaker == 1
+
+    # 3. Speaker 0 returns
+    seg0_2 = TranscriptSegment(speaker=0, text="Welcome back speaker zero.", is_final=True, start=4.0, end=5.5)
+    res0_2 = buf.add_transcript(seg0_2, current_time=5.5)
+    assert len(res0_2) == 1
+    assert res0_2[0].speaker == 0
+
+
+def test_volume_rms_calculation():
+    """Verify RMS volume calculation produces normalized [0.0, 1.0] output."""
+    from audio.base import SystemAudioCapture
+
+    # Silence
+    silence = b"\x00" * 2048
+    assert SystemAudioCapture.calculate_rms(silence) == 0.0
+
+    # Non-zero audio
+    audio = b"\x10\x27" * 1024  # 10000 in 16-bit
+    vol = SystemAudioCapture.calculate_rms(audio)
+    assert 0.0 < vol <= 1.0
+

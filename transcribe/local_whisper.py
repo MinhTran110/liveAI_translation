@@ -131,12 +131,60 @@ class LocalWhisperTranscriber(TranscriberBase):
                 except Exception as e:
                     logger.error("Error in local whisper transcription: %s", e)
 
+    def _estimate_speaker(self, audio_np) -> int:
+        """Estimate speaker ID using lightweight acoustic feature clustering (spectral centroid & ZCR)."""
+        import numpy as np
+
+        if len(audio_np) < 1600:
+            return 0
+
+        # Calculate zero-crossing rate and spectral centroid as a lightweight voice timbre fingerprint
+        zcr = float(np.mean(np.abs(np.diff(np.sign(audio_np)))))
+        fft_vals = np.abs(np.fft.rfft(audio_np[:16000]))
+        freqs = np.fft.rfftfreq(len(audio_np[:16000]), 1.0 / self.sample_rate)
+        centroid = float(np.sum(freqs * fft_vals) / (np.sum(fft_vals) + 1e-8))
+
+        feature_vector = np.array([zcr * 1000.0, centroid / 100.0])
+
+        if not hasattr(self, "_speaker_clusters"):
+            self._speaker_clusters = []  # List of (speaker_id, mean_vector, count)
+
+        best_speaker = 0
+        min_dist = float("inf")
+
+        for spk_id, mean_vec, count in self._speaker_clusters:
+            dist = float(np.linalg.norm(feature_vector - mean_vec))
+            if dist < min_dist:
+                min_dist = dist
+                best_speaker = spk_id
+
+        # Distance threshold for speaker distinction
+        SPEAKER_DISTANCE_THRESHOLD = 5.5
+
+        if min_dist > SPEAKER_DISTANCE_THRESHOLD and len(self._speaker_clusters) < 8:
+            # New speaker identified
+            new_speaker_id = len(self._speaker_clusters)
+            self._speaker_clusters.append((new_speaker_id, feature_vector, 1))
+            return new_speaker_id
+        elif self._speaker_clusters:
+            # Update running average for best speaker
+            idx = [i for i, (s, _, _) in enumerate(self._speaker_clusters) if s == best_speaker][0]
+            s_id, m_vec, count = self._speaker_clusters[idx]
+            new_mean = (m_vec * count + feature_vector) / (count + 1)
+            self._speaker_clusters[idx] = (s_id, new_mean, min(count + 1, 50))
+            return best_speaker
+        else:
+            self._speaker_clusters.append((0, feature_vector, 1))
+            return 0
+
     def _transcribe_bytes(self, pcm_bytes: bytes) -> list[TranscriptSegment]:
         """Convert PCM bytes to float32 array and run Whisper inference."""
         import numpy as np
 
         # Convert 16-bit PCM bytes to float32 normalized [-1.0, 1.0]
         audio_np = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+
+        detected_speaker = self._estimate_speaker(audio_np)
 
         lang = None if self.language in ("auto", "multi", "") else self.language
 
@@ -155,7 +203,7 @@ class LocalWhisperTranscriber(TranscriberBase):
                 results.append(
                     TranscriptSegment(
                         text=text,
-                        speaker=0,
+                        speaker=detected_speaker,
                         is_final=True,
                         start=segment.start,
                         end=segment.end,

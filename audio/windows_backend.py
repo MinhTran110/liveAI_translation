@@ -45,6 +45,7 @@ class WindowsAudioCapture(SystemAudioCapture):
                     data = recorder.record(numframes=num_frames)
                     # Convert float32 [-1.0, 1.0] to int16 PCM bytes
                     int16_data = (np.clip(data, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+                    self._current_volume = self.calculate_rms(int16_data)
                     try:
                         self._queue.put(int16_data, timeout=0.1)
                     except queue.Full:

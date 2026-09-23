@@ -108,14 +108,16 @@ class MacOSAudioCapture(SystemAudioCapture):
             def audio_callback(indata, frames, time_info, status):
                 if status:
                     logger.debug("Audio status: %s", status)
+                chunk = bytes(indata)
+                self._current_volume = self.calculate_rms(chunk)
                 try:
-                    self._queue.put_nowait(bytes(indata))
+                    self._queue.put_nowait(chunk)
                 except queue.Full:
                     try:
                         self._queue.get_nowait()
                     except queue.Empty:
                         pass
-                    self._queue.put_nowait(bytes(indata))
+                    self._queue.put_nowait(chunk)
 
             self._stream = sd.RawInputStream(
                 samplerate=self.sample_rate,

@@ -267,6 +267,9 @@ def main() -> None:
     terminal_window = TerminalWindow(
         title=f"Live Voice Translate ({status_str})",
         status_info=f"Active: {selected_provider.upper()}",
+        target_language=config.target_language,
+        on_language_change=translator.set_target_language,
+        audio_volume_provider=audio_backend.get_current_volume,
     )
 
     # Build Pipeline with render callback into UI
