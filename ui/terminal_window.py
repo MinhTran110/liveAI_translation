@@ -38,28 +38,28 @@ from ui.theme import (
 logger = logging.getLogger(__name__)
 
 SOURCE_LANGUAGES = [
-    ("auto", "⚡ Tự động (Auto)"),
-    ("ja", "🇯🇵 Tiếng Nhật (ja)"),
-    ("en", "🇺🇸 Tiếng Anh (en)"),
-    ("zh", "🇨🇳 Tiếng Trung (zh)"),
-    ("ko", "🇰🇷 Tiếng Hàn (ko)"),
-    ("vi", "🇻🇳 Tiếng Việt (vi)"),
-    ("fr", "🇫🇷 Tiếng Pháp (fr)"),
-    ("de", "🇩🇪 Tiếng Đức (de)"),
-    ("es", "🇪🇸 Tiếng TBN (es)"),
-    ("ru", "🇷🇺 Tiếng Nga (ru)"),
+    ("auto", "Tự động (Auto)"),
+    ("ja", "Tiếng Nhật (ja)"),
+    ("en", "Tiếng Anh (en)"),
+    ("zh", "Tiếng Trung (zh)"),
+    ("ko", "Tiếng Hàn (ko)"),
+    ("vi", "Tiếng Việt (vi)"),
+    ("fr", "Tiếng Pháp (fr)"),
+    ("de", "Tiếng Đức (de)"),
+    ("es", "Tiếng Tây Ban Nha (es)"),
+    ("ru", "Tiếng Nga (ru)"),
 ]
 
 TARGET_LANGUAGES = [
-    ("vi", "🇻🇳 Tiếng Việt (vi)"),
-    ("en", "🇺🇸 English (en)"),
-    ("ja", "🇯🇵 日本語 (ja)"),
-    ("zh", "🇨🇳 中文 (zh)"),
-    ("ko", "🇰🇷 한국어 (ko)"),
-    ("fr", "🇫🇷 Français (fr)"),
-    ("de", "🇩🇪 Deutsch (de)"),
-    ("es", "🇪🇸 Español (es)"),
-    ("ru", "🇷🇺 Русский (ru)"),
+    ("vi", "Tiếng Việt (vi)"),
+    ("en", "English (en)"),
+    ("ja", "Tiếng Nhật (ja)"),
+    ("zh", "Tiếng Trung (zh)"),
+    ("ko", "Tiếng Hàn (ko)"),
+    ("fr", "Français (fr)"),
+    ("de", "Deutsch (de)"),
+    ("es", "Español (es)"),
+    ("ru", "Русский (ru)"),
 ]
 
 # Legacy alias
@@ -112,9 +112,10 @@ class TerminalWindow:
         self._subtitle_count = 0
         self._detected_lang_str = ""
         self._detected_badge = None
+        self._has_interim = False
 
-        self.ui_font = "DejaVu Sans"
-        self.mono_font = "DejaVu Sans Mono"
+        self.ui_font = "Arial"
+        self.mono_font = "Arial"
 
     def start_in_thread(self) -> threading.Thread:
         """Start Tkinter window in a dedicated background thread."""
@@ -235,6 +236,16 @@ class TerminalWindow:
             selectbackground=[("readonly", "#21262d")],
         )
 
+        # Style Combobox popdown listbox with Arial
+        try:
+            self._root.option_add("*TCombobox*Listbox.font", (self.ui_font, 9))
+            self._root.option_add("*TCombobox*Listbox.background", "#21262d")
+            self._root.option_add("*TCombobox*Listbox.foreground", "#ffffff")
+            self._root.option_add("*TCombobox*Listbox.selectBackground", "#1f6feb")
+            self._root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+        except Exception:
+            pass
+
         # Configure window attributes
         try:
             self._root.wm_attributes("-topmost", self.always_on_top)
@@ -308,12 +319,12 @@ class TerminalWindow:
         # 1. Source Language dropdown
         src_lbl = tk.Label(
             tools_frame,
-            text="🎙 Nguồn:",
+            text="Nguồn:",
             bg=HEADER_BG,
             fg="#8b949e",
-            font=(self.ui_font, 8),
+            font=(self.ui_font, 9, "bold"),
         )
-        src_lbl.pack(side=tk.LEFT, padx=(0, 2))
+        src_lbl.pack(side=tk.LEFT, padx=(0, 3))
 
         src_disp_map = {code: name for code, name in SOURCE_LANGUAGES}
         src_rev_map = {name: code for code, name in SOURCE_LANGUAGES}
@@ -324,10 +335,10 @@ class TerminalWindow:
             tools_frame,
             textvariable=self._src_lang_var,
             values=[name for _, name in SOURCE_LANGUAGES],
-            width=13,
+            width=14,
             state="readonly",
             style="Dark.TCombobox",
-            font=(self.ui_font, 8),
+            font=(self.ui_font, 9),
         )
         src_lang_dropdown.pack(side=tk.LEFT, padx=(0, 4))
 
@@ -353,12 +364,12 @@ class TerminalWindow:
         # 2. Target Language dropdown
         tgt_lbl = tk.Label(
             tools_frame,
-            text="🌐 Đích:",
+            text="Dịch sang:",
             bg=HEADER_BG,
             fg="#8b949e",
-            font=(self.ui_font, 8),
+            font=(self.ui_font, 9, "bold"),
         )
-        tgt_lbl.pack(side=tk.LEFT, padx=(0, 2))
+        tgt_lbl.pack(side=tk.LEFT, padx=(0, 3))
 
         tgt_disp_map = {code: name for code, name in TARGET_LANGUAGES}
         tgt_rev_map = {name: code for code, name in TARGET_LANGUAGES}
@@ -369,10 +380,10 @@ class TerminalWindow:
             tools_frame,
             textvariable=self._lang_var,
             values=[name for _, name in TARGET_LANGUAGES],
-            width=12,
+            width=13,
             state="readonly",
             style="Dark.TCombobox",
-            font=(self.ui_font, 8),
+            font=(self.ui_font, 9),
         )
         lang_dropdown.pack(side=tk.LEFT, padx=(0, 6))
 
@@ -384,7 +395,7 @@ class TerminalWindow:
         lang_dropdown.bind("<<ComboboxSelected>>", on_combobox_select)
 
         # Pin Button
-        pin_text = "📌 Đã ghim" if self.always_on_top else "📌 Ghim"
+        pin_text = "[Đã ghim]" if self.always_on_top else "[Ghim]"
         self._pin_btn = self._create_flat_button(
             tools_frame,
             text=pin_text,
@@ -397,7 +408,7 @@ class TerminalWindow:
         # Pause / Resume Button
         self._pause_btn = self._create_flat_button(
             tools_frame,
-            text="⏸ Tạm dừng",
+            text="[Tạm dừng]",
             command=self._toggle_pause,
             padx=7,
             pady=2,
@@ -407,7 +418,7 @@ class TerminalWindow:
         # Clear Button
         clear_btn = self._create_flat_button(
             tools_frame,
-            text="🗑 Xóa",
+            text="[Xóa]",
             command=self.clear,
             padx=7,
             pady=2,
@@ -485,7 +496,7 @@ class TerminalWindow:
 
         font_down_btn = self._create_flat_button(
             font_box,
-            text="－",
+            text=" - ",
             command=self._decrease_font,
             padx=4,
             pady=0,
@@ -506,7 +517,7 @@ class TerminalWindow:
 
         font_up_btn = self._create_flat_button(
             font_box,
-            text="＋",
+            text=" + ",
             command=self._increase_font,
             padx=4,
             pady=0,
@@ -572,6 +583,24 @@ class TerminalWindow:
             spacing3=6,
         )
         self._text_area.tag_configure(
+            "interim_notice",
+            foreground="#8b949e",
+            font=(self.ui_font, FONT_SIZE_SPEAKER, "italic"),
+            lmargin1=16,
+            lmargin2=16,
+            spacing1=2,
+            spacing3=2,
+        )
+        self._text_area.tag_configure(
+            "interim_text",
+            foreground="#e6edf3",
+            font=(self.ui_font, self._font_size, "italic"),
+            lmargin1=16,
+            lmargin2=16,
+            spacing1=2,
+            spacing3=6,
+        )
+        self._text_area.tag_configure(
             "divider",
             foreground="#21262d",
             font=(self.mono_font, 6),
@@ -630,13 +659,13 @@ class TerminalWindow:
         self._is_paused = not self._is_paused
         if self._is_paused:
             if self._pause_btn:
-                self._pause_btn.config(text="▶ Tiếp tục", fg=ACCENT_AMBER)
+                self._pause_btn.config(text="[Tiếp tục]", fg=ACCENT_AMBER)
             if self._status_dot:
                 self._status_dot.config(fg=ACCENT_AMBER)
             self.set_status("Đã tạm dừng")
         else:
             if self._pause_btn:
-                self._pause_btn.config(text="⏸ Tạm dừng", fg=BUTTON_TEXT)
+                self._pause_btn.config(text="[Tạm dừng]", fg=BUTTON_TEXT)
             if self._status_dot:
                 self._status_dot.config(fg=ACCENT_GREEN)
             self.set_status("Đang lắng nghe...")
@@ -648,6 +677,7 @@ class TerminalWindow:
             self._font_size_label.config(text=f"{self._font_size}pt")
         if self._text_area:
             self._text_area.tag_configure("translated", font=(self.ui_font, self._font_size, "bold"))
+            self._text_area.tag_configure("interim_text", font=(self.ui_font, self._font_size, "italic"))
 
     def _decrease_font(self) -> None:
         """Decrease subtitle font size."""
@@ -656,6 +686,7 @@ class TerminalWindow:
             self._font_size_label.config(text=f"{self._font_size}pt")
         if self._text_area:
             self._text_area.tag_configure("translated", font=(self.ui_font, self._font_size, "bold"))
+            self._text_area.tag_configure("interim_text", font=(self.ui_font, self._font_size, "italic"))
 
     def _update_vu_meter(self) -> None:
         """Draw modern multi-segment LED meter on canvas."""
@@ -704,9 +735,9 @@ class TerminalWindow:
                 pass
         if self._pin_btn:
             if self.always_on_top:
-                self._pin_btn.config(text="📌 Đã ghim", fg=ACCENT_BLUE)
+                self._pin_btn.config(text="[Đã ghim]", fg=ACCENT_BLUE)
             else:
-                self._pin_btn.config(text="📌 Ghim", fg=BUTTON_TEXT)
+                self._pin_btn.config(text="[Ghim]", fg=BUTTON_TEXT)
 
     def _on_close(self) -> None:
         """Handle window close event."""
@@ -728,23 +759,90 @@ class TerminalWindow:
             self._root.after(0, lambda: self._status_var.set(text))
 
     def render(self, speaker: Optional[int | str], original_text: str, translated_text: str) -> None:
-        """Post a subtitle item to be displayed on the terminal window (thread-safe)."""
+        """Post a finalized subtitle item to be displayed on the terminal window (thread-safe)."""
         if self._is_paused or self._is_closed:
             return
-        self._queue.put((speaker, original_text, translated_text, datetime.now()))
+        self._queue.put(("final", speaker, original_text, translated_text, datetime.now()))
+
+    def render_interim(self, speaker: Optional[int | str], partial_text: str) -> None:
+        """Post an in-progress partial transcript to be rendered dynamically in-place (thread-safe)."""
+        if self._is_paused or self._is_closed:
+            return
+        clean = partial_text.strip()
+        if not clean:
+            return
+        self._queue.put(("interim", speaker, clean))
+
+    def clear_interim(self) -> None:
+        """Clear any active interim preview line (thread-safe)."""
+        if self._is_closed:
+            return
+        self._queue.put(("clear_interim", None, None))
 
     def _process_queue(self) -> None:
-        """Poll queued subtitle events and append them to the text widget."""
+        """Poll queued subtitle events and append or mutate them in the text widget."""
         while not self._queue.empty():
             try:
-                speaker, orig, trans, timestamp = self._queue.get_nowait()
-                self._insert_subtitle(speaker, orig, trans, timestamp)
+                item = self._queue.get_nowait()
+                if not item:
+                    continue
+                tag = item[0]
+                if tag == "interim":
+                    _, speaker, partial_text = item
+                    self._insert_interim(speaker, partial_text)
+                elif tag == "clear_interim":
+                    self._remove_interim()
+                elif tag == "final":
+                    _, speaker, orig, trans, timestamp = item
+                    self._insert_subtitle(speaker, orig, trans, timestamp)
+                elif len(item) == 4:
+                    # Backward compatibility for (speaker, orig, trans, timestamp)
+                    speaker, orig, trans, timestamp = item
+                    self._insert_subtitle(speaker, orig, trans, timestamp)
                 self._queue.task_done()
             except queue.Empty:
                 break
 
         if not self._is_closed and self._root:
             self._root.after(40, self._process_queue)
+
+    def _insert_interim(self, speaker: Optional[int | str], partial_text: str) -> None:
+        """Insert or update in-place the live streaming transcript with '...'."""
+        if not self._text_area:
+            return
+
+        if self._has_interim:
+            try:
+                self._text_area.delete("interim_start", "end")
+            except Exception:
+                pass
+        else:
+            self._text_area.mark_set("interim_start", "end-1c")
+            self._text_area.mark_gravity("interim_start", "left")
+            self._has_interim = True
+
+        spk_str = f"Speaker {speaker}" if isinstance(speaker, int) else str(speaker or "Speaker")
+        spk_color = get_speaker_color(speaker)
+        spk_interim_tag = f"spk_interim_{speaker}"
+        self._text_area.tag_configure(
+            spk_interim_tag,
+            foreground=spk_color,
+            font=(self.ui_font, FONT_SIZE_SPEAKER, "bold"),
+        )
+
+        self._text_area.insert("end", f"● {spk_str} [Đang nghe...]\n", (spk_interim_tag, "interim_notice"))
+        self._text_area.insert("end", f"{partial_text} ...\n", "interim_text")
+        self._text_area.see("end")
+
+    def _remove_interim(self) -> None:
+        """Remove in-place interim preview line if present."""
+        if not self._text_area or not self._has_interim:
+            return
+        try:
+            self._text_area.delete("interim_start", "end")
+        except Exception:
+            pass
+        self._has_interim = False
 
     def _insert_subtitle(
         self,
@@ -756,6 +854,10 @@ class TerminalWindow:
         """Format and insert a clean dialogue card into Tkinter text widget."""
         if not self._text_area:
             return
+
+        # Wipe any active interim preview line before committing the permanent card
+        if self._has_interim:
+            self._remove_interim()
 
         spk_str = f"Speaker {speaker}" if isinstance(speaker, int) else str(speaker or "Speaker")
         time_str = timestamp.strftime("%H:%M:%S")
@@ -786,9 +888,9 @@ class TerminalWindow:
         if orig:
             self._text_area.insert("end", f"{orig}\n", "original")
 
-        # 3. Translated Text (prominent, high contrast white, bold)
+        # 3. Translated Text (prominent, high contrast white, bold with clean guillemet)
         if trans:
-            self._text_area.insert("end", f"💬 {trans}\n", "translated")
+            self._text_area.insert("end", f"» {trans}\n", "translated")
 
         # 4. Subtle divider line
         self._text_area.insert("end", "─" * 48 + "\n\n", "divider")
@@ -803,6 +905,7 @@ class TerminalWindow:
 
     def clear(self) -> None:
         """Clear subtitle display."""
+        self._has_interim = False
         if self._text_area:
             self._text_area.delete("1.0", "end")
         self._subtitle_count = 0
@@ -821,7 +924,31 @@ class TerminalWindow:
         logger.info("Running live translation in headless console mode.")
         while not self._is_closed:
             try:
-                speaker, orig, trans, timestamp = self._queue.get(timeout=0.5)
+                item = self._queue.get(timeout=0.5)
+                if not item:
+                    continue
+
+                tag = item[0]
+                if tag == "interim":
+                    _, speaker, partial_text = item
+                    spk_str = f"Speaker {speaker}" if isinstance(speaker, int) else str(speaker or "Speaker")
+                    if console:
+                        console.print(f"[dim]● {spk_str} [Đang nghe...]: {partial_text}...[/dim]")
+                    else:
+                        print(f"● {spk_str} [Đang nghe...]: {partial_text}...")
+                    self._queue.task_done()
+                    continue
+                elif tag == "clear_interim":
+                    self._queue.task_done()
+                    continue
+                elif tag == "final":
+                    _, speaker, orig, trans, timestamp = item
+                elif len(item) == 4:
+                    speaker, orig, trans, timestamp = item
+                else:
+                    self._queue.task_done()
+                    continue
+
                 time_str = timestamp.strftime("[%H:%M:%S]")
                 spk_str = f"Speaker {speaker}" if isinstance(speaker, int) else str(speaker or "Speaker")
                 color = get_speaker_color(speaker)
@@ -831,14 +958,14 @@ class TerminalWindow:
                     if orig:
                         console.print(f"  [dim italic]{orig}[/dim italic]")
                     if trans:
-                        console.print(f"  [bold white]💬 {trans}[/bold white]")
+                        console.print(f"  [bold white]» {trans}[/bold white]")
                     console.print("[dim]──────────────────────────────────────────────[/dim]")
                 else:
                     print(f"{time_str} ● {spk_str}")
                     if orig:
                         print(f"   {orig}")
                     if trans:
-                        print(f"   💬 {trans}")
+                        print(f"   » {trans}")
                     print("-" * 48)
                 self._queue.task_done()
             except queue.Empty:

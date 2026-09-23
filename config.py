@@ -61,7 +61,7 @@ class AppConfig:
     # Segment buffer thresholds
     min_words: int = 5
     max_words: int = 25
-    max_wait_seconds: float = 2.5
+    max_wait_seconds: float = 1.0
 
     # Audio capture settings
     sample_rate: int = 16000
@@ -98,7 +98,7 @@ def load_config() -> AppConfig:
         models_cache_dir=os.getenv("MODELS_CACHE_DIR", "models_cache"),
         min_words=int(os.getenv("MIN_WORDS", "5")),
         max_words=int(os.getenv("MAX_WORDS", "25")),
-        max_wait_seconds=float(os.getenv("MAX_WAIT_SECONDS", "2.5")),
+        max_wait_seconds=float(os.getenv("MAX_WAIT_SECONDS", "1.0")),
         sample_rate=int(os.getenv("SAMPLE_RATE", "16000")),
         channels=int(os.getenv("CHANNELS", "1")),
         chunk_size=int(os.getenv("CHUNK_SIZE", "4096")),

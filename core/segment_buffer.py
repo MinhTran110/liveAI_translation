@@ -35,7 +35,7 @@ class SegmentBuffer:
         self,
         min_words: int = 4,
         max_words: int = 25,
-        max_wait_seconds: float = 2.2,
+        max_wait_seconds: float = 1.0,
     ):
         self.min_words = max(1, min_words)
         self.max_words = max(self.min_words, max_words)
@@ -66,6 +66,19 @@ class SegmentBuffer:
     def has_content(self) -> bool:
         """True if the buffer contains words."""
         return len(self._buffered_words) > 0
+
+    def get_current_text(self) -> str:
+        """Return the current unfinalized text in the buffer for live interim preview."""
+        if not self._buffered_words:
+            return ""
+        sample = "".join(self._buffered_words)
+        if self._is_cjk_text(sample):
+            return sample
+        return " ".join(self._buffered_words)
+
+    def get_current_speaker(self) -> Optional[int | str]:
+        """Return the speaker ID associated with the current unfinalized buffer."""
+        return self._current_speaker
 
     def add_transcript(
         self,

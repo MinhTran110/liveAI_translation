@@ -14,6 +14,7 @@ from translate.llm_translator import LLMTranslator
 logger = logging.getLogger(__name__)
 
 RenderCallback = Callable[[Optional[int | str], str, str], None]
+InterimCallback = Callable[[Optional[int | str], str], None]
 
 
 class TranslationPipeline:
@@ -26,12 +27,14 @@ class TranslationPipeline:
         segment_buffer: SegmentBuffer,
         translator: LLMTranslator,
         render_callback: Optional[RenderCallback] = None,
+        interim_render_callback: Optional[InterimCallback] = None,
     ):
         self.audio = audio_capture
         self.transcriber = transcriber
         self.segment_buffer = segment_buffer
         self.translator = translator
         self.render_callback = render_callback or (lambda spk, orig, trans: None)
+        self.interim_render_callback = interim_render_callback
 
         self._is_running = False
         self._tasks: list[asyncio.Task] = []
@@ -104,14 +107,28 @@ class TranslationPipeline:
                 await asyncio.sleep(0.1)
 
     async def _transcription_consumer(self) -> None:
-        """Consume incoming transcript segments, buffer them, and dispatch finalized sentences."""
+        """Consume incoming transcript segments, buffer them, and dispatch interim / finalized sentences."""
         async for segment in self.transcriber.get_transcripts():
             if not self._is_running:
                 break
             try:
+                # 1. If segment is a partial interim hypothesis (e.g. streaming Deepgram)
+                if not segment.is_final:
+                    if self.interim_render_callback and segment.text.strip():
+                        self.interim_render_callback(segment.speaker, segment.text.strip())
+                    continue
+
+                # 2. Add to segment buffer
                 finalized_list = self.segment_buffer.add_transcript(segment)
                 for final_seg in finalized_list:
                     await self._process_final_segment(final_seg)
+
+                # 3. If there is ongoing unfinalized speech in the buffer, emit live preview
+                if self.interim_render_callback and self.segment_buffer.has_content:
+                    interim_txt = self.segment_buffer.get_current_text()
+                    if interim_txt:
+                        spk = self.segment_buffer.get_current_speaker()
+                        self.interim_render_callback(spk, interim_txt)
             except asyncio.CancelledError:
                 break
             except Exception as e:

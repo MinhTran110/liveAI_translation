@@ -301,13 +301,14 @@ def main() -> None:
     if hasattr(transcriber, "set_language_callback"):
         transcriber.set_language_callback(terminal_window.set_detected_language)
 
-    # Build Pipeline with render callback into UI
+    # Build Pipeline with render callback and interim streaming into UI
     pipeline = TranslationPipeline(
         audio_capture=audio_backend,
         transcriber=transcriber,
         segment_buffer=segment_buffer,
         translator=translator,
         render_callback=terminal_window.render,
+        interim_render_callback=terminal_window.render_interim,
     )
 
     if args.demo:

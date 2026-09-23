@@ -35,8 +35,8 @@ class LocalWhisperTranscriber(TranscriberBase):
         download_root: Optional[str] = "models_cache",
         sample_rate: int = 16000,
         language: str = "auto",
-        min_chunk_duration: float = 3.0,
-        max_chunk_duration: float = 6.5,
+        min_chunk_duration: float = 1.2,
+        max_chunk_duration: float = 4.0,
     ):
         super().__init__(sample_rate=sample_rate, language=language)
         self.model_size = model_size

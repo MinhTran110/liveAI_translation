@@ -67,16 +67,15 @@ FONT_SIZE_TRANSLATED = 13
 
 
 def get_ui_font_family(root=None) -> str:
-    """Find the best available modern TrueType sans-serif font for subtitles and UI."""
+    """Find the best available TrueType font for subtitles and UI, strictly prioritizing Arial."""
     candidates = [
-        "Segoe UI",
-        "SF Pro Text",
-        "Ubuntu",
-        "DejaVu Sans",
-        "Liberation Sans",
-        "Noto Sans",
-        "Helvetica Neue",
         "Arial",
+        "Liberation Sans",
+        "DejaVu Sans",
+        "Ubuntu",
+        "Segoe UI",
+        "Helvetica",
+        "sans-serif",
     ]
     if root is not None:
         try:
@@ -87,20 +86,17 @@ def get_ui_font_family(root=None) -> str:
                     return available[cand.lower()]
         except Exception:
             pass
-    return "DejaVu Sans"
+    return "Arial"
 
 
 def get_mono_font_family(root=None) -> str:
-    """Find the best available monospace font for code, badges, and meters."""
+    """Find the best available font for code, badges, and meters, strictly prioritizing Arial."""
     candidates = [
-        "Cascadia Code",
-        "JetBrains Mono",
-        "Fira Code",
-        "DejaVu Sans Mono",
+        "Arial",
         "Liberation Mono",
-        "Noto Sans Mono",
+        "DejaVu Sans Mono",
         "Consolas",
-        "Courier New",
+        "monospace",
     ]
     if root is not None:
         try:
@@ -111,4 +107,5 @@ def get_mono_font_family(root=None) -> str:
                     return available[cand.lower()]
         except Exception:
             pass
-    return "DejaVu Sans Mono"
+    return "Arial"
+
