@@ -276,15 +276,30 @@ def main() -> None:
         target_language=config.target_language,
     )
 
-    # 5. UI Window Initialization
-    status_str = f"[{selected_provider.upper()}] → [{config.target_language.upper()}]"
+    # 5. Language change handlers
+    def handle_source_language_change(new_src: str) -> None:
+        transcriber.set_language(new_src)
+        translator.set_source_language(new_src)
+        logger.info("Switched source language to: %s", new_src)
+
+    def handle_target_language_change(new_tgt: str) -> None:
+        translator.set_target_language(new_tgt)
+        logger.info("Switched target language to: %s", new_tgt)
+
+    # 6. UI Window Initialization
+    status_str = f"[{selected_provider.upper()}] | {config.source_language.upper()} → {config.target_language.upper()}"
     terminal_window = TerminalWindow(
         title=f"Live Voice Translate ({status_str})",
-        status_info=f"Active: {selected_provider.upper()}",
+        status_info=f"Sẵn sàng | Nguồn: {config.source_language.upper()}",
+        source_language=config.source_language,
         target_language=config.target_language,
-        on_language_change=translator.set_target_language,
+        on_source_language_change=handle_source_language_change,
+        on_language_change=handle_target_language_change,
         audio_volume_provider=audio_backend.get_current_volume,
     )
+
+    if hasattr(transcriber, "set_language_callback"):
+        transcriber.set_language_callback(terminal_window.set_detected_language)
 
     # Build Pipeline with render callback into UI
     pipeline = TranslationPipeline(

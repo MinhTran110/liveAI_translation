@@ -37,17 +37,33 @@ from ui.theme import (
 
 logger = logging.getLogger(__name__)
 
-LANGUAGES = [
-    ("vi", "Tiếng Việt"),
-    ("en", "English"),
-    ("ja", "日本語"),
-    ("zh", "中文"),
-    ("ko", "한국어"),
-    ("fr", "Français"),
-    ("de", "Deutsch"),
-    ("es", "Español"),
-    ("ru", "Русский"),
+SOURCE_LANGUAGES = [
+    ("auto", "⚡ Tự động (Auto)"),
+    ("ja", "🇯🇵 Tiếng Nhật (ja)"),
+    ("en", "🇺🇸 Tiếng Anh (en)"),
+    ("zh", "🇨🇳 Tiếng Trung (zh)"),
+    ("ko", "🇰🇷 Tiếng Hàn (ko)"),
+    ("vi", "🇻🇳 Tiếng Việt (vi)"),
+    ("fr", "🇫🇷 Tiếng Pháp (fr)"),
+    ("de", "🇩🇪 Tiếng Đức (de)"),
+    ("es", "🇪🇸 Tiếng TBN (es)"),
+    ("ru", "🇷🇺 Tiếng Nga (ru)"),
 ]
+
+TARGET_LANGUAGES = [
+    ("vi", "🇻🇳 Tiếng Việt (vi)"),
+    ("en", "🇺🇸 English (en)"),
+    ("ja", "🇯🇵 日本語 (ja)"),
+    ("zh", "🇨🇳 中文 (zh)"),
+    ("ko", "🇰🇷 한국어 (ko)"),
+    ("fr", "🇫🇷 Français (fr)"),
+    ("de", "🇩🇪 Deutsch (de)"),
+    ("es", "🇪🇸 Español (es)"),
+    ("ru", "🇷🇺 Русский (ru)"),
+]
+
+# Legacy alias
+LANGUAGES = TARGET_LANGUAGES
 
 
 class TerminalWindow:
@@ -56,11 +72,13 @@ class TerminalWindow:
     def __init__(
         self,
         title: str = "Live AI Translation Subtitles",
-        width: int = 760,
+        width: int = 780,
         height: int = 500,
         always_on_top: bool = True,
         status_info: str = "Đang lắng nghe...",
+        source_language: str = "auto",
         target_language: str = "vi",
+        on_source_language_change: Optional[Callable[[str], None]] = None,
         on_language_change: Optional[Callable[[str], None]] = None,
         audio_volume_provider: Optional[Callable[[], float]] = None,
     ):
@@ -69,7 +87,9 @@ class TerminalWindow:
         self.height = height
         self.always_on_top = always_on_top
         self.status_info = status_info
+        self.source_language = source_language
         self.target_language = target_language
+        self.on_source_language_change = on_source_language_change
         self.on_language_change = on_language_change
         self.audio_volume_provider = audio_volume_provider
 
@@ -90,6 +110,8 @@ class TerminalWindow:
         self._is_closed = False
         self._speaker_tag_counter = 0
         self._subtitle_count = 0
+        self._detected_lang_str = ""
+        self._detected_badge = None
 
         self.ui_font = "DejaVu Sans"
         self.mono_font = "DejaVu Sans Mono"
@@ -283,36 +305,80 @@ class TerminalWindow:
         tools_frame = tk.Frame(header_frame, bg=HEADER_BG)
         tools_frame.pack(side=tk.RIGHT)
 
-        # Target Language combobox
-        lang_icon = tk.Label(
+        # 1. Source Language dropdown
+        src_lbl = tk.Label(
             tools_frame,
-            text="🌐",
+            text="🎙 Nguồn:",
             bg=HEADER_BG,
             fg="#8b949e",
-            font=(self.ui_font, 9),
+            font=(self.ui_font, 8),
         )
-        lang_icon.pack(side=tk.LEFT, padx=(0, 2))
+        src_lbl.pack(side=tk.LEFT, padx=(0, 2))
 
-        # Format combobox values: "Tiếng Việt (vi)"
-        lang_display_map = {code: f"{name} ({code})" for code, name in LANGUAGES}
-        reverse_map = {f"{name} ({code})": code for code, name in LANGUAGES}
-        current_disp = lang_display_map.get(self.target_language, f"({self.target_language})")
+        src_disp_map = {code: name for code, name in SOURCE_LANGUAGES}
+        src_rev_map = {name: code for code, name in SOURCE_LANGUAGES}
+        src_current_disp = src_disp_map.get(self.source_language, f"({self.source_language})")
 
-        self._lang_var = tk.StringVar(value=current_disp)
-        lang_dropdown = ttk.Combobox(
+        self._src_lang_var = tk.StringVar(value=src_current_disp)
+        src_lang_dropdown = ttk.Combobox(
             tools_frame,
-            textvariable=self._lang_var,
-            values=[lang_display_map[code] for code, _ in LANGUAGES],
+            textvariable=self._src_lang_var,
+            values=[name for _, name in SOURCE_LANGUAGES],
             width=13,
             state="readonly",
             style="Dark.TCombobox",
-            font=(self.ui_font, 9),
+            font=(self.ui_font, 8),
         )
-        lang_dropdown.pack(side=tk.LEFT, padx=(0, 8))
+        src_lang_dropdown.pack(side=tk.LEFT, padx=(0, 4))
+
+        def on_src_combobox_select(event=None):
+            disp = self._src_lang_var.get()
+            code = src_rev_map.get(disp, "auto")
+            self._handle_source_lang_change(code)
+
+        src_lang_dropdown.bind("<<ComboboxSelected>>", on_src_combobox_select)
+
+        # Detected language badge (dynamic indicator in auto mode)
+        self._detected_badge = tk.Label(
+            tools_frame,
+            text="",
+            bg="#21262d",
+            fg=ACCENT_BLUE,
+            font=(self.mono_font, 8, "bold"),
+            padx=3,
+            pady=1,
+        )
+        self._detected_badge.pack(side=tk.LEFT, padx=(0, 6))
+
+        # 2. Target Language dropdown
+        tgt_lbl = tk.Label(
+            tools_frame,
+            text="🌐 Đích:",
+            bg=HEADER_BG,
+            fg="#8b949e",
+            font=(self.ui_font, 8),
+        )
+        tgt_lbl.pack(side=tk.LEFT, padx=(0, 2))
+
+        tgt_disp_map = {code: name for code, name in TARGET_LANGUAGES}
+        tgt_rev_map = {name: code for code, name in TARGET_LANGUAGES}
+        tgt_current_disp = tgt_disp_map.get(self.target_language, f"({self.target_language})")
+
+        self._lang_var = tk.StringVar(value=tgt_current_disp)
+        lang_dropdown = ttk.Combobox(
+            tools_frame,
+            textvariable=self._lang_var,
+            values=[name for _, name in TARGET_LANGUAGES],
+            width=12,
+            state="readonly",
+            style="Dark.TCombobox",
+            font=(self.ui_font, 8),
+        )
+        lang_dropdown.pack(side=tk.LEFT, padx=(0, 6))
 
         def on_combobox_select(event=None):
             disp = self._lang_var.get()
-            code = reverse_map.get(disp, disp)
+            code = tgt_rev_map.get(disp, disp)
             self._handle_lang_change(code)
 
         lang_dropdown.bind("<<ComboboxSelected>>", on_combobox_select)
@@ -520,12 +586,33 @@ class TerminalWindow:
         self._root.after(80, self._update_vu_meter)
         self._root.mainloop()
 
+    def set_detected_language(self, lang_code: str, prob: float) -> None:
+        """Update visual badge indicating auto-detected source language."""
+        pct = int(round(prob * 100))
+        self._detected_lang_str = f"[{lang_code.upper()} {pct}%]"
+        if self._root and self._detected_badge:
+            self._root.after(0, lambda: self._detected_badge.config(text=self._detected_lang_str))
+
+    def _handle_source_lang_change(self, new_src: str) -> None:
+        """Handle source language selection."""
+        self.source_language = new_src
+        if self.on_source_language_change:
+            self.on_source_language_change(new_src)
+        if new_src in ("auto", "multi", ""):
+            self.set_status(f"Nguồn: Tự động → Đích: {self.target_language.upper()}")
+            if self._detected_badge:
+                self._detected_badge.config(text="")
+        else:
+            self.set_status(f"Nguồn: {new_src.upper()} → Đích: {self.target_language.upper()}")
+            if self._detected_badge:
+                self._detected_badge.config(text=f"[{new_src.upper()}]")
+
     def _handle_lang_change(self, new_lang: str) -> None:
         """Handle target language selection."""
         self.target_language = new_lang
         if self.on_language_change:
             self.on_language_change(new_lang)
-        self.set_status(f"Dịch sang: {new_lang.upper()}")
+        self.set_status(f"Nguồn: {self.source_language.upper()} → Đích: {new_lang.upper()}")
 
     def _update_opacity(self, val: str) -> None:
         """Update window transparency and indicator label."""

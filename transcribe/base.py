@@ -34,6 +34,10 @@ class TranscriberBase(ABC):
         """Check if the transcriber is currently running."""
         return self._is_running
 
+    def set_language(self, language: str) -> None:
+        """Update source audio language at runtime."""
+        self.language = language
+
     @abstractmethod
     async def start(self) -> None:
         """Start the transcriber session."""

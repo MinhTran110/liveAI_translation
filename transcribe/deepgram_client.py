@@ -37,6 +37,11 @@ class DeepgramStreamingTranscriber(TranscriberBase):
         self._receiver_task: Optional[asyncio.Task] = None
         self._sender_task: Optional[asyncio.Task] = None
 
+    def set_language(self, language: str) -> None:
+        """Update language code for Deepgram streaming."""
+        super().set_language("multi" if language in ("auto", "multi", "") else language)
+        logger.info("Deepgram language updated to: %s", self.language)
+
     def _build_ws_url(self) -> str:
         """Construct the WebSocket URL with streaming query parameters."""
         params = {

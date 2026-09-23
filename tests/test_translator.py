@@ -24,3 +24,11 @@ def test_translate_text():
     assert len(result) > 0
     assert len(translator.history) == 1
     assert translator.history[0].speaker == "Speaker 0"
+
+
+def test_translator_set_source_language():
+    translator = LLMTranslator(source_language="auto", target_language="vi")
+    assert translator.source_language == "auto"
+    translator.set_source_language("ja")
+    assert translator.source_language == "ja"
+

@@ -167,8 +167,9 @@ class LLMTranslator:
         import urllib.request
 
         try:
+            sl = self.source_language if self.source_language not in ("auto", "multi", "") else "auto"
             url = (
-                f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={target_lang}&dt=t&q="
+                f"https://translate.googleapis.com/translate_a/single?client=gtx&sl={sl}&tl={target_lang}&dt=t&q="
                 + urllib.parse.quote(text)
             )
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -207,6 +208,11 @@ class LLMTranslator:
         """Update target translation language at runtime."""
         self.target_language = new_lang.lower().strip()
         logger.info("Updated translation target language to: %s", self.target_language)
+
+    def set_source_language(self, new_lang: str) -> None:
+        """Update source audio language at runtime."""
+        self.source_language = new_lang.lower().strip()
+        logger.info("Updated translation source language to: %s", self.source_language)
 
     def clear_context(self) -> None:
         """Reset conversation context history."""

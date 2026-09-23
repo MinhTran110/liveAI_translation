@@ -4,15 +4,28 @@ import asyncio
 import io
 import logging
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from transcribe.base import TranscriberBase, TranscriptSegment
 
 logger = logging.getLogger(__name__)
 
+# Priming prompts inspired by MemoAI to anchor Whisper vocabulary and prevent English drift
+LANGUAGE_PROMPTS = {
+    "ja": "こんにちは。日本語の会話、アニメ、動画の音声文字起こしです。",
+    "zh": "你好，这是中文普通话对话与视频的语音转写。",
+    "ko": "안녕하세요, 한국어 동영상 및 대话 음성 텍스트 변환입니다.",
+    "en": "Hello, real-time English speech transcription.",
+    "vi": "Xin chào, đây là bản ghi âm giọng nói tiếng Việt.",
+    "fr": "Bonjour, ceci est une transcription vocale en français.",
+    "de": "Hallo, dies ist eine deutsche Sprachübertragung.",
+    "es": "Hola, esta es una transcripción de voz en español.",
+    "ru": "Здравствуйте, это транскрипция русской речи.",
+}
+
 
 class LocalWhisperTranscriber(TranscriberBase):
-    """Local ASR engine using faster-whisper with VAD and model caching."""
+    """Local ASR engine using faster-whisper with VAD, language stabilization, and model caching."""
 
     def __init__(
         self,
@@ -38,6 +51,11 @@ class LocalWhisperTranscriber(TranscriberBase):
         self._buffer_lock = asyncio.Lock()
         self._worker_task: Optional[asyncio.Task] = None
         self._last_process_time = time.time()
+
+        # Language stabilization states
+        self._locked_language: Optional[str] = None if language in ("auto", "multi", "") else language
+        self._consecutive_detections: int = 0
+        self._language_callback: Optional[Callable[[str, float], None]] = None
 
     def _load_model(self) -> None:
         """Lazy load faster-whisper model."""
@@ -128,12 +146,35 @@ class LocalWhisperTranscriber(TranscriberBase):
 
             if raw_bytes and self._model:
                 try:
+                    # Skip silence and electronic hum to prevent Whisper hallucinations
+                    from audio.base import SystemAudioCapture
+
+                    rms = SystemAudioCapture.calculate_rms(raw_bytes)
+                    if rms < 0.004:
+                        continue
+
                     segments = await asyncio.to_thread(self._transcribe_bytes, raw_bytes)
                     for seg in segments:
                         if seg.text.strip():
                             await self._queue.put(seg)
                 except Exception as e:
                     logger.error("Error in local whisper transcription: %s", e)
+
+    def set_language(self, language: str) -> None:
+        """Update source language at runtime and reset auto-detection lock."""
+        super().set_language(language)
+        if language in ("auto", "multi", ""):
+            self._locked_language = None
+            self._consecutive_detections = 0
+            logger.info("LocalWhisperTranscriber: Source language set to AUTO (smart stabilization active).")
+        else:
+            self._locked_language = language
+            self._consecutive_detections = 0
+            logger.info("LocalWhisperTranscriber: Source language strictly locked to '%s'.", language)
+
+    def set_language_callback(self, callback: Optional[Callable[[str, float], None]]) -> None:
+        """Register callback for auto-detected language updates."""
+        self._language_callback = callback
 
     def _estimate_speaker(self, audio_np) -> int:
         """Estimate speaker ID using lightweight acoustic feature clustering (spectral centroid & ZCR)."""
@@ -182,7 +223,7 @@ class LocalWhisperTranscriber(TranscriberBase):
             return 0
 
     def _transcribe_bytes(self, pcm_bytes: bytes) -> list[TranscriptSegment]:
-        """Convert PCM bytes to float32 array and run Whisper inference."""
+        """Convert PCM bytes to float32 array and run Whisper inference with stabilized language."""
         import numpy as np
 
         # Convert 16-bit PCM bytes to float32 normalized [-1.0, 1.0]
@@ -190,14 +231,25 @@ class LocalWhisperTranscriber(TranscriberBase):
 
         detected_speaker = self._estimate_speaker(audio_np)
 
-        lang = None if self.language in ("auto", "multi", "") else self.language
+        is_auto = self.language in ("auto", "multi", "")
+        effective_lang = self._locked_language if is_auto else self.language
+        if effective_lang in ("auto", "multi", ""):
+            effective_lang = None
+
+        prompt = LANGUAGE_PROMPTS.get(effective_lang) if effective_lang else None
 
         segments_gen, info = self._model.transcribe(
             audio_np,
             beam_size=5,
-            language=lang,
+            language=effective_lang,
+            initial_prompt=prompt,
+            condition_on_previous_text=False,
+            temperature=[0.0, 0.2, 0.4],
+            compression_ratio_threshold=2.4,
+            log_prob_threshold=-1.0,
+            no_speech_threshold=0.6,
             vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500),
+            vad_parameters=dict(min_silence_duration_ms=400, speech_pad_ms=200, threshold=0.4),
         )
 
         results = []
@@ -214,4 +266,39 @@ class LocalWhisperTranscriber(TranscriberBase):
                         confidence=segment.avg_logprob,
                     )
                 )
+
+        # Smart Language Stabilizer in Auto mode
+        if is_auto and results:
+            detected = info.language
+            prob = getattr(info, "language_probability", 1.0)
+
+            if self._locked_language is None:
+                # Lock onto the first detected language if confidence is reasonable
+                if prob >= 0.45:
+                    self._locked_language = detected
+                    self._consecutive_detections = 1
+                    logger.info("Auto-detected and locked language: %s (confidence: %.1f%%)", detected, prob * 100)
+                    if self._language_callback:
+                        self._language_callback(detected, prob)
+            else:
+                # Only switch if a different language is sustained with high confidence over 2 chunks
+                if detected != self._locked_language:
+                    if prob >= 0.85:
+                        self._consecutive_detections += 1
+                        if self._consecutive_detections >= 2:
+                            logger.info(
+                                "Language switched from %s to %s (confidence: %.1f%%)",
+                                self._locked_language,
+                                detected,
+                                prob * 100,
+                            )
+                            self._locked_language = detected
+                            self._consecutive_detections = 0
+                            if self._language_callback:
+                                self._language_callback(detected, prob)
+                    else:
+                        self._consecutive_detections = 0
+                else:
+                    self._consecutive_detections = 0
+
         return results
