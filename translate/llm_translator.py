@@ -114,7 +114,7 @@ class LLMTranslator:
 
         # Fallback/mock mode when no client is configured
         if not self._client:
-            translated = self._mock_translate(clean_text)
+            translated = await asyncio.to_thread(self._mock_translate, clean_text)
             self.history.append(ConversationTurn(speaker_label, clean_text, translated))
             return translated
 
@@ -128,10 +128,10 @@ class LLMTranslator:
             elif self.provider == "openai":
                 translated = await self._call_openai(system_prompt, user_prompt)
             else:
-                translated = self._mock_translate(clean_text)
+                translated = await asyncio.to_thread(self._mock_translate, clean_text)
         except Exception as e:
             logger.error("LLM translation failed: %s. Using fallback.", e)
-            translated = self._mock_translate(clean_text)
+            translated = await asyncio.to_thread(self._mock_translate, clean_text)
 
         self.history.append(ConversationTurn(speaker_label, clean_text, translated))
         return translated
@@ -160,9 +160,35 @@ class LLMTranslator:
         )
         return response.choices[0].message.content.strip()
 
+    def _free_online_translate(self, text: str, target_lang: str) -> Optional[str]:
+        """Free real-time translation using Google Translate endpoint without requiring API keys."""
+        import json
+        import urllib.parse
+        import urllib.request
+
+        try:
+            url = (
+                f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={target_lang}&dt=t&q="
+                + urllib.parse.quote(text)
+            )
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=3.5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                translated = "".join(part[0] for part in data[0] if part and part[0])
+                if translated.strip():
+                    return translated.strip()
+        except Exception as e:
+            logger.debug("Free translation fallback error: %s", e)
+        return None
+
     def _mock_translate(self, text: str) -> str:
-        """Mock translator for testing when API keys are not supplied."""
-        # Simple sample translations for demonstration
+        """Translate using free online endpoint or fallback dictionary."""
+        # 1. Attempt free online translation
+        online_res = self._free_online_translate(text, self.target_language)
+        if online_res:
+            return online_res
+
+        # 2. Simple dictionary for offline demo testing
         phrases = {
             "welcome everyone to today's project presentation.": "Chào mừng mọi người đến với buổi thuyết trình dự án hôm nay.",
             "we are discussing the new real-time translation architecture.": "Chúng tôi đang thảo luận về kiến trúc dịch thuật thời gian thực mới.",
@@ -175,7 +201,7 @@ class LLMTranslator:
         lower = text.lower().strip()
         if lower in phrases:
             return phrases[lower]
-        return f"[Dịch ({self.target_language})]: {text}"
+        return text
 
     def set_target_language(self, new_lang: str) -> None:
         """Update target translation language at runtime."""

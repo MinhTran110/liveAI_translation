@@ -22,8 +22,8 @@ class LocalWhisperTranscriber(TranscriberBase):
         download_root: Optional[str] = "models_cache",
         sample_rate: int = 16000,
         language: str = "auto",
-        min_chunk_duration: float = 1.5,
-        max_chunk_duration: float = 4.0,
+        min_chunk_duration: float = 3.0,
+        max_chunk_duration: float = 6.5,
     ):
         super().__init__(sample_rate=sample_rate, language=language)
         self.model_size = model_size
@@ -112,10 +112,14 @@ class LocalWhisperTranscriber(TranscriberBase):
                 current_duration = buf_len / bytes_per_second
                 elapsed = now - self._last_process_time
 
-                # Check if buffer has reached minimum duration or elapsed timeout
-                if (current_duration >= self.min_chunk_duration and elapsed >= self.min_chunk_duration) or (
-                    current_duration >= self.max_chunk_duration
-                ):
+                # Check if buffer has reached maximum duration, or has minimum duration and a brief pause
+                should_transcribe = False
+                if current_duration >= self.max_chunk_duration:
+                    should_transcribe = True
+                elif current_duration >= self.min_chunk_duration and elapsed >= self.min_chunk_duration:
+                    should_transcribe = True
+
+                if should_transcribe:
                     raw_bytes = bytes(self._audio_buffer)
                     self._audio_buffer.clear()
                     self._last_process_time = now

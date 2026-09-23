@@ -29,13 +29,13 @@ class SegmentBuffer:
     4. Inactivity timeout (MAX_WAIT_SECONDS elapsed with no new input).
     """
 
-    PUNCTUATION_REGEX = re.compile(r"[.?!…]+$")
+    PUNCTUATION_REGEX = re.compile(r"[.?!…~。！？、\n]+$")
 
     def __init__(
         self,
-        min_words: int = 5,
+        min_words: int = 4,
         max_words: int = 25,
-        max_wait_seconds: float = 1.5,
+        max_wait_seconds: float = 2.2,
     ):
         self.min_words = max(1, min_words)
         self.max_words = max(self.min_words, max_words)
@@ -45,6 +45,17 @@ class SegmentBuffer:
         self._buffered_words: List[str] = []
         self._start_time: Optional[float] = None
         self._last_update_time: Optional[float] = None
+
+    @staticmethod
+    def _is_cjk_text(text: str) -> bool:
+        """Check if string contains Chinese, Japanese, or Korean characters."""
+        return any(
+            "\u4e00" <= c <= "\u9fff"
+            or "\u3040" <= c <= "\u30ff"
+            or "\u31f0" <= c <= "\u31ff"
+            or "\uac00" <= c <= "\ud7af"
+            for c in text
+        )
 
     @property
     def current_word_count(self) -> int:
@@ -87,17 +98,19 @@ class SegmentBuffer:
             self._start_time = segment.start if segment.start > 0 else now
         self._last_update_time = now
 
-        # Add incoming words
+        # Add incoming words / tokens
         new_words = raw_text.split()
         self._buffered_words.extend(new_words)
 
-        # Trigger 2: Reached MAX_WORDS
+        combined_text = " ".join(self._buffered_words)
+        is_cjk = self._is_cjk_text(combined_text)
+
+        # Trigger 2: Reached MAX_WORDS (force break long monologues)
         while len(self._buffered_words) >= self.max_words:
-            # Slice first max_words
             chunk_words = self._buffered_words[: self.max_words]
             self._buffered_words = self._buffered_words[self.max_words :]
 
-            text = " ".join(chunk_words)
+            text = "".join(chunk_words) if is_cjk else " ".join(chunk_words)
             end_t = segment.end if (not self._buffered_words and segment.end > 0) else now
             finalized_segments.append(
                 FinalSegment(
@@ -108,16 +121,24 @@ class SegmentBuffer:
                     word_count=len(chunk_words),
                 )
             )
-            # Reset start time for remaining words
             self._start_time = now
 
-        # Trigger 3: Reached MIN_WORDS and ends with sentence-ending punctuation
-        if len(self._buffered_words) >= self.min_words:
-            current_text = " ".join(self._buffered_words)
-            if self.PUNCTUATION_REGEX.search(current_text):
-                flushed = self._finalize_buffer(end_time=segment.end or now)
-                if flushed:
-                    finalized_segments.append(flushed)
+        # Also trigger break if CJK text exceeds 32 characters
+        if is_cjk and len("".join(self._buffered_words)) >= 32:
+            flushed = self._finalize_buffer(end_time=segment.end or now)
+            if flushed:
+                finalized_segments.append(flushed)
+
+        # Trigger 3: Reached MIN_WORDS (or CJK chars) and ends with punctuation
+        current_text = "".join(self._buffered_words) if is_cjk else " ".join(self._buffered_words)
+        char_count = len(current_text.replace(" ", ""))
+        cjk_min_reached = is_cjk and char_count >= 6
+        latin_min_reached = len(self._buffered_words) >= self.min_words
+
+        if (cjk_min_reached or latin_min_reached) and self.PUNCTUATION_REGEX.search(current_text):
+            flushed = self._finalize_buffer(end_time=segment.end or now)
+            if flushed:
+                finalized_segments.append(flushed)
 
         return finalized_segments
 
@@ -148,7 +169,13 @@ class SegmentBuffer:
         if not self._buffered_words:
             return None
 
-        text = " ".join(self._buffered_words)
+        # Build natural text (preserve Asian character spacing without unwanted extra spaces)
+        sample = "".join(self._buffered_words)
+        if self._is_cjk_text(sample):
+            text = "".join(self._buffered_words)
+        else:
+            text = " ".join(self._buffered_words)
+
         count = len(self._buffered_words)
         start_t = self._start_time if self._start_time is not None else end_time
 

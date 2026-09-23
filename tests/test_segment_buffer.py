@@ -154,3 +154,22 @@ def test_volume_rms_calculation():
     vol = SystemAudioCapture.calculate_rms(audio)
     assert 0.0 < vol <= 1.0
 
+
+def test_cjk_segment_buffering():
+    """Verify Japanese/Chinese text with punctuation finalizes properly."""
+    buf = SegmentBuffer(min_words=5, max_words=20, max_wait_seconds=5.0)
+
+    # Japanese sentence ending with Japanese period '。'
+    seg = TranscriptSegment(
+        speaker=0,
+        text="こんにちは、お元気ですか。",
+        is_final=True,
+        start=0.0,
+        end=2.0,
+    )
+    res = buf.add_transcript(seg, current_time=2.0)
+    assert len(res) == 1
+    assert res[0].speaker == 0
+    assert res[0].text == "こんにちは、お元気ですか。"
+
+
