@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import logging
 import os
+import platform
 import signal
 import sys
 import threading
@@ -175,6 +176,19 @@ async def async_main(
         terminal_window.set_status("Stopped")
 
 
+def can_display_gui() -> bool:
+    """Test whether graphical display is reachable for Tkinter."""
+    try:
+        import tkinter as tk
+
+        test_root = tk.Tk()
+        test_root.withdraw()
+        test_root.destroy()
+        return True
+    except Exception:
+        return False
+
+
 def main() -> None:
     """Main application lifecycle."""
     args = parse_args()
@@ -281,8 +295,8 @@ def main() -> None:
         render_callback=terminal_window.render,
     )
 
-    # If headless requested, or running in an environment without X11
-    is_headless = args.headless or (platform.system() == "Linux" and not os.environ.get("DISPLAY"))
+    # If headless requested, or running in an environment without working display
+    is_headless = args.headless or (not can_display_gui())
 
     if is_headless:
         # Run console fallback directly in main thread
@@ -292,6 +306,8 @@ def main() -> None:
             asyncio.run(async_main(pipeline, terminal_window, duration=args.duration))
         except KeyboardInterrupt:
             logger.info("Keyboard interrupt received. Exiting...")
+        finally:
+            terminal_window.close()
     else:
         # Launch Tkinter GUI in main thread and asyncio pipeline in background thread
         def run_async_loop():
@@ -305,8 +321,9 @@ def main() -> None:
             terminal_window.run()
         except KeyboardInterrupt:
             pass
+        finally:
+            terminal_window.close()
 
-    terminal_window._is_closed = True
     print("\n[Live Voice Translate] Application shutdown complete.")
 
 

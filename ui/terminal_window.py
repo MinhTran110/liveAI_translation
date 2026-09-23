@@ -354,9 +354,16 @@ class TerminalWindow:
 
     def _on_close(self) -> None:
         """Handle window close event."""
+        self.close()
+
+    def close(self) -> None:
+        """Close window and stop processing loops."""
         self._is_closed = True
         if self._root:
-            self._root.destroy()
+            try:
+                self._root.destroy()
+            except Exception:
+                pass
 
     def set_status(self, text: str) -> None:
         """Update header status message."""
