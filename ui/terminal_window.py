@@ -28,6 +28,7 @@ from ui.theme import (
     STATUS_TEXT_COLOR,
     SUB_BAR_BG,
     TEXT_COLOR,
+    TIMESTAMP_COLOR,
     TRANSLATED_TEXT_COLOR,
     get_mono_font_family,
     get_speaker_color,
