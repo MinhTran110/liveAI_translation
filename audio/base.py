@@ -30,6 +30,14 @@ class SystemAudioCapture(ABC):
         """Get current audio volume level (RMS) in range [0.0, 1.0]."""
         return self._current_volume
 
+    def get_audio_source(self) -> str:
+        """Get current audio capture mode ('both', 'mic', 'system')."""
+        return getattr(self, "audio_source", "both")
+
+    def set_audio_source(self, mode: str) -> None:
+        """Switch audio capture mode at runtime ('both', 'mic', 'system')."""
+        pass
+
     @staticmethod
     def calculate_rms(pcm_bytes: bytes) -> float:
         """Calculate normalized RMS volume (0.0 to 1.0) from 16-bit PCM bytes."""

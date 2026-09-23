@@ -17,7 +17,17 @@ import signal
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Optional
+
+# Ensure dependencies in local virtualenv are discoverable across all Python environments
+_project_root = Path(__file__).resolve().parent
+for _candidate_venv in [
+    _project_root / "venv" / "lib" / "python3.11" / "site-packages",
+    _project_root / "venv" / "lib" / "python3.12" / "site-packages",
+]:
+    if _candidate_venv.is_dir() and str(_candidate_venv) not in sys.path:
+        sys.path.insert(0, str(_candidate_venv))
 
 from audio.backend_selector import get_audio_backend
 from config import AppConfig, load_config
@@ -90,6 +100,13 @@ def parse_args() -> argparse.Namespace:
         "--yes",
         action="store_true",
         help="Auto-confirm recommended model and configuration without prompting.",
+    )
+    parser.add_argument(
+        "--audio-source",
+        type=str,
+        choices=["both", "mic", "system"],
+        default=None,
+        help="Audio capture source: 'both' (mix mic + system), 'mic' (microphone), or 'system' (system output).",
     )
     parser.add_argument(
         "--duration",
@@ -199,6 +216,8 @@ def main() -> None:
         config.target_language = args.target_lang
     if args.source_lang:
         config.source_language = args.source_lang
+    if args.audio_source:
+        config.audio_source = args.audio_source
 
     print("\n" + "=" * 65)
     print("        LIVE VOICE TRANSLATE — REAL-TIME DIARIZATION         ")
@@ -230,10 +249,11 @@ def main() -> None:
         selected_compute = recommendation.compute_type
 
     logger.info(
-        "Active Configuration: Provider=%s | Model=%s | Device=%s | TargetLang=%s",
+        "Active Configuration: Provider=%s | Model=%s | Device=%s | AudioSource=%s | TargetLang=%s",
         selected_provider.upper(),
         selected_model,
         selected_device,
+        config.audio_source.upper(),
         config.target_language,
     )
 
@@ -245,6 +265,9 @@ def main() -> None:
         chunk_size=config.chunk_size,
         mock=use_mock_audio,
         synthetic_pattern="ambient" if args.demo else "silence",
+        audio_source=config.audio_source,
+        sink_name=config.sink_name,
+        source_name=config.source_name,
     )
 
     # 4. Transcriber Base
@@ -276,7 +299,7 @@ def main() -> None:
         target_language=config.target_language,
     )
 
-    # 5. Language change handlers
+    # 5. Language and Audio change handlers
     def handle_source_language_change(new_src: str) -> None:
         transcriber.set_language(new_src)
         translator.set_source_language(new_src)
@@ -286,15 +309,26 @@ def main() -> None:
         translator.set_target_language(new_tgt)
         logger.info("Switched target language to: %s", new_tgt)
 
+    def handle_audio_source_change(new_source: str) -> None:
+        config.audio_source = new_source
+        if hasattr(audio_backend, "set_audio_source"):
+            audio_backend.set_audio_source(new_source)
+        logger.info("Switched audio capture source to: %s", new_source)
+
     # 6. UI Window Initialization
     status_str = f"[{selected_provider.upper()}] | {config.source_language.upper()} → {config.target_language.upper()}"
+    source_labels = {"both": "CẢ HAI (MIX)", "mic": "MICROPHONE", "system": "HỆ THỐNG"}
+    audio_label = source_labels.get(config.audio_source, config.audio_source.upper())
+
     terminal_window = TerminalWindow(
         title=f"Live Voice Translate ({status_str})",
-        status_info=f"Sẵn sàng | Nguồn: {config.source_language.upper()}",
+        status_info=f"Sẵn sàng | Nguồn âm: {audio_label}",
         source_language=config.source_language,
         target_language=config.target_language,
+        audio_source=config.audio_source,
         on_source_language_change=handle_source_language_change,
         on_language_change=handle_target_language_change,
+        on_audio_source_change=handle_audio_source_change,
         audio_volume_provider=audio_backend.get_current_volume,
     )
 

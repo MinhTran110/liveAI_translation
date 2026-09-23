@@ -67,6 +67,9 @@ class AppConfig:
     sample_rate: int = 16000
     channels: int = 1
     chunk_size: int = 4096
+    audio_source: str = "both"  # 'both', 'mic', 'system'
+    sink_name: Optional[str] = None
+    source_name: Optional[str] = None
 
 
 def load_config() -> AppConfig:
@@ -102,4 +105,7 @@ def load_config() -> AppConfig:
         sample_rate=int(os.getenv("SAMPLE_RATE", "16000")),
         channels=int(os.getenv("CHANNELS", "1")),
         chunk_size=int(os.getenv("CHUNK_SIZE", "4096")),
+        audio_source=os.getenv("AUDIO_SOURCE", "both").lower().strip(),
+        sink_name=os.getenv("SINK_NAME", "").strip() or None,
+        source_name=os.getenv("SOURCE_NAME", "").strip() or None,
     )

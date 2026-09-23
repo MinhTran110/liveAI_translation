@@ -192,7 +192,7 @@ class LocalWhisperTranscriber(TranscriberBase):
                     from audio.base import SystemAudioCapture
 
                     rms = SystemAudioCapture.calculate_rms(raw_bytes)
-                    if rms < 0.0008:
+                    if rms < 0.0004:
                         continue
 
                     segments = await asyncio.to_thread(self._transcribe_bytes, raw_bytes)
@@ -291,7 +291,7 @@ class LocalWhisperTranscriber(TranscriberBase):
             log_prob_threshold=-1.0,
             no_speech_threshold=0.6,
             vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=400, speech_pad_ms=200, threshold=0.4),
+            vad_parameters=dict(min_silence_duration_ms=300, speech_pad_ms=250, threshold=0.35),
         )
 
         results = []

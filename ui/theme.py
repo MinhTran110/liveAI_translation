@@ -66,20 +66,59 @@ FONT_SIZE_ORIGINAL = 10
 FONT_SIZE_TRANSLATED = 13
 
 
+def ensure_x11_truetype_fonts() -> None:
+    """Ensure TrueType fonts (like Arial) are indexed and registered in X11 font path."""
+    import os
+    import platform
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    if platform.system() != "Linux" or not os.getenv("DISPLAY"):
+        return
+
+    user_font_dir = Path.home() / ".fonts" / "msttcorefonts"
+    sys_font_dir = Path("/usr/share/fonts/truetype/msttcorefonts")
+
+    try:
+        if sys_font_dir.exists() and not (user_font_dir / "fonts.dir").exists():
+            user_font_dir.mkdir(parents=True, exist_ok=True)
+            for ttf in sys_font_dir.glob("*.ttf"):
+                dest = user_font_dir / ttf.name
+                if not dest.exists():
+                    try:
+                        dest.symlink_to(ttf)
+                    except Exception:
+                        shutil.copy2(ttf, dest)
+            if shutil.which("mkfontscale"):
+                subprocess.run(["mkfontscale", str(user_font_dir)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if shutil.which("mkfontdir"):
+                subprocess.run(["mkfontdir", str(user_font_dir)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        if user_font_dir.exists() and shutil.which("xset"):
+            subprocess.run(["xset", "+fp", str(user_font_dir)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["xset", "fp", "rehash"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
 def get_ui_font_family(root=None) -> str:
     """Find the best available TrueType font for subtitles and UI, strictly prioritizing Arial."""
+    ensure_x11_truetype_fonts()
     candidates = [
         "Arial",
+        "Nimbus Sans L",
+        "Helvetica",
         "Liberation Sans",
         "DejaVu Sans",
         "Ubuntu",
         "Segoe UI",
-        "Helvetica",
         "sans-serif",
     ]
     if root is not None:
         try:
             import tkinter.font as tkfont
+
             available = {f.lower(): f for f in tkfont.families(root)}
             for cand in candidates:
                 if cand.lower() in available:
@@ -91,8 +130,11 @@ def get_ui_font_family(root=None) -> str:
 
 def get_mono_font_family(root=None) -> str:
     """Find the best available font for code, badges, and meters, strictly prioritizing Arial."""
+    ensure_x11_truetype_fonts()
     candidates = [
         "Arial",
+        "Nimbus Mono L",
+        "Nimbus Sans L",
         "Liberation Mono",
         "DejaVu Sans Mono",
         "Consolas",
@@ -101,6 +143,7 @@ def get_mono_font_family(root=None) -> str:
     if root is not None:
         try:
             import tkinter.font as tkfont
+
             available = {f.lower(): f for f in tkfont.families(root)}
             for cand in candidates:
                 if cand.lower() in available:
@@ -108,4 +151,5 @@ def get_mono_font_family(root=None) -> str:
         except Exception:
             pass
     return "Arial"
+
 

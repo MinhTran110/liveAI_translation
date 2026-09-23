@@ -65,6 +65,12 @@ TARGET_LANGUAGES = [
 # Legacy alias
 LANGUAGES = TARGET_LANGUAGES
 
+AUDIO_SOURCES = [
+    ("both", "Cả hai (Mix)"),
+    ("mic", "Microphone"),
+    ("system", "Âm thanh máy"),
+]
+
 
 class TerminalWindow:
     """Always-on-top modern subtitle window for live audio translation."""
@@ -72,14 +78,16 @@ class TerminalWindow:
     def __init__(
         self,
         title: str = "Live AI Translation Subtitles",
-        width: int = 780,
+        width: int = 860,
         height: int = 500,
         always_on_top: bool = True,
         status_info: str = "Đang lắng nghe...",
         source_language: str = "auto",
         target_language: str = "vi",
+        audio_source: str = "both",
         on_source_language_change: Optional[Callable[[str], None]] = None,
         on_language_change: Optional[Callable[[str], None]] = None,
+        on_audio_source_change: Optional[Callable[[str], None]] = None,
         audio_volume_provider: Optional[Callable[[], float]] = None,
     ):
         self.window_title = title
@@ -89,8 +97,10 @@ class TerminalWindow:
         self.status_info = status_info
         self.source_language = source_language
         self.target_language = target_language
+        self.audio_source = audio_source
         self.on_source_language_change = on_source_language_change
         self.on_language_change = on_language_change
+        self.on_audio_source_change = on_audio_source_change
         self.audio_volume_provider = audio_volume_provider
 
         self._queue: queue.Queue = queue.Queue()
@@ -103,6 +113,8 @@ class TerminalWindow:
         self._font_size_label = None
         self._count_label = None
         self._vu_canvas = None
+        self._vu_pct_label = None
+        self._audio_src_var = None
         self._pause_btn = None
         self._pin_btn = None
         self._font_size = FONT_SIZE_TRANSLATED
@@ -311,6 +323,50 @@ class TerminalWindow:
             highlightbackground=BORDER_COLOR,
         )
         self._vu_canvas.pack(side=tk.LEFT)
+
+        self._vu_pct_label = tk.Label(
+            vu_frame,
+            text=" 0%",
+            bg=HEADER_BG,
+            fg="#8b949e",
+            font=(self.mono_font, 8),
+            width=4,
+            anchor="w",
+        )
+        self._vu_pct_label.pack(side=tk.LEFT, padx=(2, 0))
+
+        # Audio Source Selector (both, mic, system)
+        audio_src_lbl = tk.Label(
+            vu_frame,
+            text="Nguồn âm:",
+            bg=HEADER_BG,
+            fg="#8b949e",
+            font=(self.ui_font, 9, "bold"),
+        )
+        audio_src_lbl.pack(side=tk.LEFT, padx=(12, 3))
+
+        audio_disp_map = {code: name for code, name in AUDIO_SOURCES}
+        audio_rev_map = {name: code for code, name in AUDIO_SOURCES}
+        current_audio_disp = audio_disp_map.get(self.audio_source, "Cả hai (Mix)")
+
+        self._audio_src_var = tk.StringVar(value=current_audio_disp)
+        audio_src_dropdown = ttk.Combobox(
+            vu_frame,
+            textvariable=self._audio_src_var,
+            values=[name for _, name in AUDIO_SOURCES],
+            width=13,
+            state="readonly",
+            style="Dark.TCombobox",
+            font=(self.ui_font, 9),
+        )
+        audio_src_dropdown.pack(side=tk.LEFT)
+
+        def on_audio_src_select(event=None):
+            disp = self._audio_src_var.get()
+            code = audio_rev_map.get(disp, "both")
+            self._handle_audio_source_change(code)
+
+        audio_src_dropdown.bind("<<ComboboxSelected>>", on_audio_src_select)
 
         # Right-side Toolbar Controls
         tools_frame = tk.Frame(header_frame, bg=HEADER_BG)
@@ -688,11 +744,34 @@ class TerminalWindow:
             self._text_area.tag_configure("translated", font=(self.ui_font, self._font_size, "bold"))
             self._text_area.tag_configure("interim_text", font=(self.ui_font, self._font_size, "italic"))
 
+    def _handle_audio_source_change(self, new_src: str) -> None:
+        """Handle audio source mode change (both, mic, system)."""
+        self.audio_source = new_src
+        if self.on_audio_source_change:
+            self.on_audio_source_change(new_src)
+        mode_names = {"both": "Cả hai (Mix)", "mic": "Microphone", "system": "Âm thanh máy"}
+        lbl = mode_names.get(new_src, new_src)
+        self.set_status(f"Nguồn âm: {lbl} | Đang lắng nghe...")
+
+    def set_audio_source(self, new_src: str) -> None:
+        """Update audio source dropdown selection programmatically."""
+        self.audio_source = new_src
+        audio_disp_map = {code: name for code, name in AUDIO_SOURCES}
+        disp = audio_disp_map.get(new_src, "Cả hai (Mix)")
+        if self._audio_src_var:
+            self._audio_src_var.set(disp)
+
     def _update_vu_meter(self) -> None:
-        """Draw modern multi-segment LED meter on canvas."""
+        """Draw modern multi-segment LED meter on canvas and update live volume percentage."""
         if self._vu_canvas and self.audio_volume_provider:
             try:
                 vol = max(0.0, min(1.0, self.audio_volume_provider()))
+                if self._vu_pct_label:
+                    pct = int(round(vol * 100))
+                    self._vu_pct_label.config(
+                        text=f"{pct:2d}%",
+                        fg=ACCENT_GREEN if pct > 3 else "#8b949e",
+                    )
                 self._vu_canvas.delete("all")
 
                 total_segments = 8
