@@ -1,0 +1,24 @@
+# Environment variables
+.env
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Model cache & data
+models_cache/
+*.pcm
+*.wav
+*.mp3
+
+# IDE
+.vscode/
+.idea/
