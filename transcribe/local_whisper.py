@@ -58,10 +58,12 @@ class LocalWhisperTranscriber(TranscriberBase):
         self._language_callback: Optional[Callable[[str, float], None]] = None
 
     def _load_model(self) -> None:
-        """Lazy load faster-whisper model."""
+        """Lazy load faster-whisper model, prioritizing local cached snapshots to avoid network/proxy errors."""
         if self._model is not None:
             return
         try:
+            import os
+            from pathlib import Path
             from faster_whisper import WhisperModel
 
             logger.info(
@@ -71,12 +73,52 @@ class LocalWhisperTranscriber(TranscriberBase):
                 self.compute_type,
                 self.download_root,
             )
-            self._model = WhisperModel(
-                self.model_size,
-                device=self.device,
-                compute_type=self.compute_type,
-                download_root=self.download_root,
-            )
+
+            loaded = False
+
+            # 1. Directly check if a local snapshot directory exists in download_root
+            if self.download_root and os.path.isdir(self.download_root):
+                cache_dir = Path(self.download_root)
+                snapshot_dirs = list(cache_dir.glob(f"models--*--faster-whisper-{self.model_size}/snapshots/*"))
+                if not snapshot_dirs:
+                    snapshot_dirs = list(cache_dir.glob(f"*{self.model_size}*/snapshots/*"))
+                if snapshot_dirs and (snapshot_dirs[0] / "model.bin").is_file():
+                    snapshot_path = str(snapshot_dirs[0])
+                    logger.info("Found local cached model snapshot at '%s'. Loading offline...", snapshot_path)
+                    try:
+                        self._model = WhisperModel(
+                            snapshot_path,
+                            device=self.device,
+                            compute_type=self.compute_type,
+                            local_files_only=True,
+                        )
+                        loaded = True
+                    except Exception as e:
+                        logger.warning("Direct snapshot load failed (%s). Retrying via model name.", e)
+
+            # 2. Try loading by model name with local_files_only
+            if not loaded:
+                try:
+                    self._model = WhisperModel(
+                        self.model_size,
+                        device=self.device,
+                        compute_type=self.compute_type,
+                        download_root=self.download_root,
+                        local_files_only=True,
+                    )
+                    loaded = True
+                except Exception:
+                    pass
+
+            # 3. Fallback to standard online download if not already cached
+            if not loaded:
+                self._model = WhisperModel(
+                    self.model_size,
+                    device=self.device,
+                    compute_type=self.compute_type,
+                    download_root=self.download_root,
+                )
+
             logger.info("faster-whisper model loaded successfully.")
         except ImportError:
             raise ImportError(
@@ -150,7 +192,7 @@ class LocalWhisperTranscriber(TranscriberBase):
                     from audio.base import SystemAudioCapture
 
                     rms = SystemAudioCapture.calculate_rms(raw_bytes)
-                    if rms < 0.004:
+                    if rms < 0.0008:
                         continue
 
                     segments = await asyncio.to_thread(self._transcribe_bytes, raw_bytes)

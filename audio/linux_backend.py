@@ -30,27 +30,54 @@ class LinuxAudioCapture(SystemAudioCapture):
         self._backend_method = "auto"
 
     def _find_monitor_device_sounddevice(self) -> Optional[int]:
-        """Try finding a monitor device using sounddevice."""
+        """Try finding a genuine monitor device using sounddevice (never fall back to microphone)."""
         try:
             import sounddevice as sd
 
             devices = sd.query_devices()
-            # First search for monitor in name
             for idx, dev in enumerate(devices):
                 name = dev.get("name", "").lower()
                 max_inputs = dev.get("max_input_channels", 0)
                 if max_inputs > 0 and (".monitor" in name or "monitor of" in name):
                     logger.info("Found Linux monitor device (sounddevice) [%d]: %s", idx, dev["name"])
                     return idx
-
-            # Fallback to default input if no explicit monitor found
-            default_in = sd.default.device[0]
-            if default_in is not None and default_in >= 0:
-                logger.info("Using default input device [%d] (sounddevice)", default_in)
-                return default_in
         except Exception as e:
             logger.debug("sounddevice detection failed: %s", e)
         return None
+
+    def _find_default_sink(self) -> str:
+        """Find the active default sink target for PipeWire / PulseAudio."""
+        if self.sink_name:
+            return self.sink_name
+
+        # 1. Try wpctl status to find the active playback sink marked with '*'
+        try:
+            out = subprocess.check_output(["wpctl", "status"], text=True, stderr=subprocess.DEVNULL)
+            in_sinks = False
+            for line in out.splitlines():
+                if "Sinks:" in line:
+                    in_sinks = True
+                    continue
+                if in_sinks:
+                    if any(k in line for k in ["Sink endpoints:", "Sources:", "Streams:", "Video:"]):
+                        break
+                    if "*" in line:
+                        for p in line.strip().split():
+                            clean = p.rstrip(".")
+                            if clean.isdigit():
+                                return clean
+        except Exception:
+            pass
+
+        # 2. Try pactl get-default-sink
+        try:
+            out = subprocess.check_output(["pactl", "get-default-sink"], text=True, stderr=subprocess.DEVNULL).strip()
+            if out:
+                return out + ".monitor"
+        except Exception:
+            pass
+
+        return "@DEFAULT_AUDIO_SINK@"
 
     def _start_sounddevice(self, device_idx: int) -> bool:
         """Start capturing via sounddevice."""
@@ -87,14 +114,17 @@ class LinuxAudioCapture(SystemAudioCapture):
             return False
 
     def _start_pw_record(self) -> bool:
-        """Capture via native PipeWire pw-record CLI."""
+        """Capture via native PipeWire pw-record CLI tapping into system audio sink."""
         import shutil
 
         if not shutil.which("pw-record"):
             return False
 
+        target = self.sink_name or self._find_default_sink()
         cmd = [
             "pw-record",
+            "--target",
+            str(target),
             "--format",
             "s16",
             "--rate",
@@ -103,6 +133,7 @@ class LinuxAudioCapture(SystemAudioCapture):
             str(self.channels),
             "-",
         ]
+        logger.info("Starting PipeWire pw-record with target sink: %s", target)
 
         try:
             self._process = subprocess.Popen(
@@ -180,24 +211,24 @@ class LinuxAudioCapture(SystemAudioCapture):
 
         self._is_active = True
 
-        # 1. Try sounddevice if portaudio is available
-        dev_idx = self._find_monitor_device_sounddevice()
-        if dev_idx is not None and self._start_sounddevice(dev_idx):
-            logger.info("LinuxAudioCapture started with sounddevice")
-            return
-
-        # 2. Try native PipeWire pw-record
+        # 1. Try native PipeWire pw-record first (gold standard on modern Linux)
         if self._start_pw_record():
             logger.info("LinuxAudioCapture started with PipeWire pw-record")
             return
 
-        # 3. Try PulseAudio parec
+        # 2. Try PulseAudio parec
         if self._start_parec():
             logger.info("LinuxAudioCapture started with parec subprocess")
             return
 
+        # 3. Try sounddevice if an explicit monitor device is present
+        dev_idx = self._find_monitor_device_sounddevice()
+        if dev_idx is not None and self._start_sounddevice(dev_idx):
+            logger.info("LinuxAudioCapture started with sounddevice monitor")
+            return
+
         logger.warning(
-            "Neither sounddevice nor pw-record nor parec capture succeeded. "
+            "Neither pw-record nor parec nor sounddevice monitor capture succeeded. "
             "System audio may not be audible or running in a container without PulseAudio/PipeWire."
         )
 

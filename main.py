@@ -340,7 +340,11 @@ def main() -> None:
     else:
         # Launch Tkinter GUI in main thread and asyncio pipeline in background thread
         def run_async_loop():
-            asyncio.run(async_main(pipeline, terminal_window, duration=args.duration))
+            try:
+                asyncio.run(async_main(pipeline, terminal_window, duration=args.duration))
+            except Exception as e:
+                logger.error("Fatal error in audio translation pipeline: %s", e, exc_info=True)
+                terminal_window.set_status(f"Lỗi: {e}")
 
         async_thread = threading.Thread(target=run_async_loop, daemon=True)
         async_thread.start()
