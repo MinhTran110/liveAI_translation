@@ -225,6 +225,8 @@ def run_builtin_fallback_server(host: str, port: int):
                     from ingest.youtube_downloader import download_youtube_audio
                     from ingest.file_handler import process_uploaded_file
                     from storage.db import create_note, add_segments
+                    from transcribe.youtube_subtitles import fetch_youtube_subtitles
+                    from transcribe.local_whisper import LocalWhisperFileTranscriber
                     from transcribe.deepgram_client import DeepgramPreRecordedTranscriber
                     from translate.llm_translator import LLMTranslator
 
@@ -233,24 +235,56 @@ def run_builtin_fallback_server(host: str, port: int):
                     file_path = body.get("file_path")
                     source_lang = body.get("source_lang", "auto")
                     target_lang = body.get("target_lang", "vi")
+                    engine = body.get("engine", "youtube_sub")
+
+                    raw_segments = None
+                    title = "Untitled Note"
+                    duration = 0.0
+                    audio_path = None
 
                     if source_type == "youtube":
-                        ingest_info = download_youtube_audio(url)
-                    else:
-                        ingest_info = process_uploaded_file(file_path)
+                        if not url:
+                            self._send_error_json(400, "Missing YouTube URL.")
+                            return
 
-                    transcriber = DeepgramPreRecordedTranscriber()
-                    raw_segments = transcriber.transcribe_file(ingest_info["audio_path"], source_lang=source_lang)
+                        if engine in ("youtube_sub", "auto", ""):
+                            subs, meta = fetch_youtube_subtitles(url, preferred_lang=source_lang)
+                            if subs:
+                                raw_segments = subs
+                                title = meta.get("title", f"YouTube Video ({meta.get('video_id')})")
+                                duration = meta.get("duration", 0.0)
+                                logger.info("Using native YouTube subtitles (%d segments).", len(subs))
+
+                        if not raw_segments:
+                            ingest_info = download_youtube_audio(url)
+                            audio_path = ingest_info["audio_path"]
+                            title = ingest_info.get("title", title)
+                            duration = ingest_info.get("duration", duration)
+                    else:
+                        if not file_path:
+                            self._send_error_json(400, "Missing file path.")
+                            return
+                        ingest_info = process_uploaded_file(file_path)
+                        audio_path = ingest_info["audio_path"]
+                        title = ingest_info.get("title", "Untitled Note")
+                        duration = ingest_info.get("duration", 0.0)
+
+                    if not raw_segments:
+                        if engine == "deepgram" and os.getenv("DEEPGRAM_API_KEY", "").strip():
+                            transcriber = DeepgramPreRecordedTranscriber()
+                        else:
+                            transcriber = LocalWhisperFileTranscriber()
+                        raw_segments = transcriber.transcribe_file(audio_path, source_lang=source_lang)
 
                     translator = LLMTranslator(target_language=target_lang, source_language=source_lang)
-                    trans_segments = translator.translate_segments(raw_segments, target_lang=target_lang)
+                    trans_segments = translator.translate_segments(raw_segments, target_lang=target_lang, source_lang=source_lang)
 
                     nid = create_note(
-                        title=ingest_info["title"],
+                        title=title,
                         source_type=source_type,
                         source_url=url,
-                        file_path=ingest_info["audio_path"],
-                        duration=ingest_info["duration"],
+                        file_path=audio_path,
+                        duration=duration,
                         source_lang=source_lang,
                         target_lang=target_lang,
                     )

@@ -171,7 +171,11 @@ async function runProcessingPipeline() {
 
   progressBox.classList.remove("hidden");
   btnProcess.disabled = true;
-  progressText.textContent = "Đang nhận diện giọng nói (ASR) & phân tách người nói (Diarization)...";
+  if (payload.source_type === "youtube" && engine === "youtube_sub") {
+    progressText.textContent = "⚡ Đang trích xuất phụ đề gốc / tự động từ YouTube & dịch thuật...";
+  } else {
+    progressText.textContent = "🎙️ Đang nhận diện giọng nói (ASR) & dịch thuật...";
+  }
 
   try {
     const res = await fetch(`${API_BASE}/api/process`, {

@@ -90,10 +90,11 @@
           </div>
 
           <div class="setting-item">
-            <label for="asrEngine">Công nghệ nhận diện:</label>
+            <label for="asrEngine">Công nghệ nhận diện / Phụ đề:</label>
             <select id="asrEngine" class="form-control">
-              <option value="local" selected>Local Faster-Whisper (Ngoại tuyến, Miễn phí, 100% video)</option>
-              <option value="deepgram">Cloud Deepgram (Cần DEEPGRAM_API_KEY trong .env)</option>
+              <option value="youtube_sub" selected>⚡ Phụ đề gốc / Tự động YouTube (Cực nhanh, 100% video, Khuyên dùng)</option>
+              <option value="local">🎙️ Local Faster-Whisper (Ngoại tuyến, ASR toàn bộ âm thanh)</option>
+              <option value="deepgram">☁️ Cloud Deepgram (Diarization đa người nói, cần API Key)</option>
             </select>
           </div>
         </div>

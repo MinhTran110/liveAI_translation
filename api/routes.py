@@ -63,30 +63,51 @@ def create_router():
     async def process_media(req: ProcessRequest):
         """Execute full pipeline: Ingest -> Transcribe -> Translate -> Store in SQLite."""
         try:
+            raw_segments = None
+            title = "Untitled Note"
+            duration = 0.0
+            audio_path = None
+
             # 1. Ingest
             if req.source_type == "youtube":
                 if not req.url:
                     raise HTTPException(status_code=400, detail="Missing YouTube URL.")
-                ingest_info = download_youtube_audio(req.url)
+
+                # If engine is 'youtube_sub' or 'auto', attempt extracting YouTube native subtitles first
+                if req.engine in ("youtube_sub", "auto", ""):
+                    from transcribe.youtube_subtitles import fetch_youtube_subtitles
+                    subs, meta = fetch_youtube_subtitles(req.url, preferred_lang=req.source_lang)
+                    if subs:
+                        raw_segments = subs
+                        title = meta.get("title", f"YouTube Video ({meta.get('video_id')})")
+                        duration = meta.get("duration", 0.0)
+                        logger.info("Using native YouTube subtitles (%d segments).", len(subs))
+
+                # If no subtitles found or user explicitly requested ASR engine, download audio
+                if not raw_segments:
+                    ingest_info = download_youtube_audio(req.url)
+                    audio_path = ingest_info["audio_path"]
+                    title = ingest_info.get("title", title)
+                    duration = ingest_info.get("duration", duration)
             else:
                 if not req.file_path:
                     raise HTTPException(status_code=400, detail="Missing uploaded file path.")
                 ingest_info = process_uploaded_file(req.file_path)
+                audio_path = ingest_info["audio_path"]
+                title = ingest_info.get("title", "Untitled Note")
+                duration = ingest_info.get("duration", 0.0)
 
-            audio_path = ingest_info["audio_path"]
-            title = ingest_info.get("title", "Untitled Note")
-            duration = ingest_info.get("duration", 0.0)
+            # 2. Transcribe via ASR if not extracted from YouTube subtitles
+            if not raw_segments:
+                if req.engine == "deepgram" and os.getenv("DEEPGRAM_API_KEY", "").strip():
+                    transcriber = DeepgramPreRecordedTranscriber()
+                else:
+                    transcriber = LocalWhisperFileTranscriber()
 
-            # 2. Transcribe with Speaker Diarization
-            if req.engine == "local":
-                transcriber = LocalWhisperFileTranscriber()
-            else:
-                transcriber = DeepgramPreRecordedTranscriber()
-
-            raw_segments = transcriber.transcribe_file(
-                audio_path,
-                source_lang=req.source_lang,
-            )
+                raw_segments = transcriber.transcribe_file(
+                    audio_path,
+                    source_lang=req.source_lang,
+                )
 
             # 3. Contextual Translation
             translator = LLMTranslator(

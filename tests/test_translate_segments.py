@@ -20,6 +20,7 @@ from export.vtt_exporter import export_vtt, format_vtt_timestamp
 from export.markdown_exporter import export_markdown
 from transcribe.base import TranscriptSegment
 from transcribe.deepgram_client import DeepgramPreRecordedTranscriber
+from transcribe.youtube_subtitles import parse_vtt_subtitles, parse_json3_subtitles, _vtt_time_to_seconds
 from translate.llm_translator import LLMTranslator
 
 
@@ -172,3 +173,51 @@ def test_contextual_translation():
     assert len(translated) == 2
     assert translated[0].translation != ""
     assert len(translator.history) == 2
+
+
+def test_youtube_subtitle_parsers():
+    """Test WebVTT and JSON3 subtitle parsing logic for YouTube native subtitles."""
+    # 1. Timestamp parser
+    assert _vtt_time_to_seconds("00:01:23.456") == pytest.approx(83.456)
+    assert _vtt_time_to_seconds("01:23.456") == pytest.approx(83.456)
+
+    # 2. WebVTT parsing
+    sample_vtt = """WEBVTT
+Kind: captions
+Language: en
+
+00:00:01.000 --> 00:00:04.500
+<c.colorE5E5E5>Hello and welcome</c> to the presentation.
+
+00:00:05.200 --> 00:00:08.800
+Today we will explore AI agents.
+"""
+    vtt_segments = parse_vtt_subtitles(sample_vtt)
+    assert len(vtt_segments) == 2
+    assert vtt_segments[0].start == 1.0
+    assert vtt_segments[0].end == 4.5
+    assert vtt_segments[0].text == "Hello and welcome to the presentation."
+    assert vtt_segments[1].text == "Today we will explore AI agents."
+
+    # 3. JSON3 parsing
+    sample_json3 = {
+        "events": [
+            {
+                "tStartMs": 1000,
+                "dDurationMs": 2500,
+                "segs": [{"utf8": "Hello "}, {"utf8": "world!"}],
+            },
+            {
+                "tStartMs": 4000,
+                "dDurationMs": 3000,
+                "segs": [{"utf8": "This is a native subtitle test."}],
+            },
+        ]
+    }
+    json3_segments = parse_json3_subtitles(sample_json3)
+    assert len(json3_segments) == 2
+    assert json3_segments[0].start == 1.0
+    assert json3_segments[0].end == 3.5
+    assert json3_segments[0].text == "Hello world!"
+    assert json3_segments[1].text == "This is a native subtitle test."
+

@@ -6,16 +6,21 @@ MemoAI là ứng dụng dịch video & ghi chú thông minh chuyên biệt cho m
 
 ## ✨ Tính năng nổi bật
 
+- ⚡ **Trích xuất Phụ đề gốc / Tự động YouTube (Native Subtitles & Auto-captions - Mới)**:
+  - Lấy trực tiếp bản phụ đề chính thức (Official Subtitles) hoặc phụ đề tự động (Auto-generated Captions) theo ngôn ngữ gốc của video (tiếng Anh, Nhật, v.v.) chỉ trong **2–4 giây**.
+  - **Không tốn thời gian tải audio** hay chạy nhận diện nặng nhọc, đảm bảo 100% độ chính xác về từ vựng, ngữ pháp và mốc thời gian (timestamp).
+  - Tự động dịch sang tiếng Việt và xuất file phụ đề `.srt`, `.vtt` hay ghi chú `.md` ngay lập tức.
+
 - 📺 **Đa dạng nguồn đầu vào**:
-  - Dán trực tiếp liên kết YouTube (tự động nhận diện và trích xuất âm thanh qua `yt-dlp`).
+  - Dán trực tiếp liên kết YouTube (hỗ trợ cả trích xuất phụ đề gốc lẫn tải audio qua `yt-dlp`).
   - Tải lên file video/audio từ máy tính (`.mp4`, `.mkv`, `.webm`, `.mp3`, `.wav`, `.m4a`, `.flac`, `.opus`).
   - **Không phụ thuộc vào `ffmpeg` hệ thống**: Tự động nhận diện và xử lý luồng âm thanh native (`.webm`, `.m4a`) chất lượng cao mà không bị lỗi thiếu công cụ.
   - Cơ chế **Cache video ID thông minh**: Tự động tái sử dụng âm thanh đã tải để tiết kiệm băng thông và thời gian xử lý.
 
-- 🎙️ **Công nghệ nhận diện giọng nói kép (Dual ASR Engines)**:
+- 🎙️ **Công nghệ nhận diện giọng nói kép (Dual ASR Engines - Khi không có phụ đề hoặc dùng file upload)**:
   - **Local Faster-Whisper (Khuyến nghị, Ngoại tuyến 100%)**: Chạy trực tiếp trên CPU/GPU Linux, hoàn toàn miễn phí, nhận diện toàn bộ nội dung từ giây đầu tiên đến phút cuối cùng (kể cả video dài 18 phút hay nhiều giờ).
   - **Cloud Deepgram (Nova-2)**: Phân tách người nói (Speaker Diarization) và ngắt câu tự nhiên theo lượt phát biểu (Utterances).
-  - **Tự động chuyển tiếp thông minh**: Nếu người dùng chưa cấu hình `DEEPGRAM_API_KEY`, hệ thống tự động kích hoạt Faster-Whisper cục bộ để đảm bảo nhận diện 100% nội dung thực tế của video.
+  - **Tự động chuyển tiếp thông minh**: Khi dán link YouTube, ưu tiên phụ đề gốc YouTube; nếu video không có phụ đề hoặc khi upload file local, hệ thống tự động chạy Faster-Whisper ngoại tuyến hoặc Deepgram Cloud.
 
 - 🌐 **Dịch thuật ngữ cảnh thông minh**:
   - Dịch hội thoại mượt mà sang tiếng Việt, ghi nhớ ngữ cảnh lượt nói trước để dịch đại từ nhân xưng tự nhiên.
@@ -49,9 +54,10 @@ video-translate-notes/
 │   ├── youtube_downloader.py     # Tải audio YouTube không cần ffmpeg + cache ID
 │   └── file_handler.py           # Xử lý file video/audio local tải lên
 │
-├── transcribe/                   # ASR + Diarization
+├── transcribe/                   # Subtitles & ASR + Diarization
 │   ├── __init__.py
 │   ├── base.py                   # Dataclass TranscriptSegment
+│   ├── youtube_subtitles.py      # Trích xuất phụ đề gốc & tự động từ YouTube (WebVTT/JSON3)
 │   ├── deepgram_client.py        # Deepgram Nova-2 (tự fallback sang Local Whisper nếu thiếu key)
 │   ├── local_whisper.py          # Faster-Whisper chạy offline trên CPU/GPU
 │   └── model_selector.py         # Quét phần cứng Linux (/proc/cpuinfo, /proc/meminfo)
@@ -142,3 +148,4 @@ Kiểm tra tự động:
 - Xuất ghi chú Markdown có phân chia Speaker
 - Phân tích cú pháp Diarization từ Deepgram API
 - Dịch ngữ cảnh hội thoại đa lượt
+- Phân tích và trích xuất phụ đề WebVTT & JSON3 từ YouTube
