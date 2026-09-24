@@ -1,188 +1,198 @@
-"""Deepgram streaming ASR client with speaker diarization."""
+"""Deepgram pre-recorded audio transcription client with speaker diarization."""
 
-import asyncio
-from collections import Counter
 import json
 import logging
-from typing import Optional
-from urllib.parse import urlencode
+import os
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+import urllib.request
+import urllib.error
 
-from transcribe.base import TranscriberBase, TranscriptSegment
+from transcribe.base import TranscriptSegment
 
 logger = logging.getLogger(__name__)
 
 
-class DeepgramStreamingTranscriber(TranscriberBase):
-    """Deepgram WebSocket streaming transcriber with real-time speaker diarization."""
+class DeepgramPreRecordedTranscriber:
+    """Transcribes audio files using Deepgram's pre-recorded API with speaker diarization."""
 
     def __init__(
         self,
-        api_key: str,
-        sample_rate: int = 16000,
-        language: str = "multi",
+        api_key: Optional[str] = None,
         model: str = "nova-2",
-        punctuate: bool = True,
+        language: str = "multi",
         diarize: bool = True,
-        interim_results: bool = True,
+        smart_format: bool = True,
+        punctuate: bool = True,
     ):
-        super().__init__(sample_rate=sample_rate, language=language)
-        self.api_key = api_key
+        self.api_key = api_key or os.getenv("DEEPGRAM_API_KEY", "").strip() or None
         self.model = model
-        self.punctuate = punctuate
+        self.language = language
         self.diarize = diarize
-        self.interim_results = interim_results
+        self.smart_format = smart_format
+        self.punctuate = punctuate
 
-        self._ws = None
-        self._send_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=200)
-        self._receiver_task: Optional[asyncio.Task] = None
-        self._sender_task: Optional[asyncio.Task] = None
+    def transcribe_file(
+        self,
+        audio_file_path: str | Path,
+        source_lang: Optional[str] = None,
+    ) -> List[TranscriptSegment]:
+        """Transcribe an audio file and return speaker diarized segments.
 
-    def set_language(self, language: str) -> None:
-        """Update language code for Deepgram streaming."""
-        super().set_language("multi" if language in ("auto", "multi", "") else language)
-        logger.info("Deepgram language updated to: %s", self.language)
+        Args:
+            audio_file_path: Local path to the audio file (.mp3, .wav, etc.)
+            source_lang: Optional language override (e.g. 'ja', 'en', 'vi', 'multi')
 
-    def _build_ws_url(self) -> str:
-        """Construct the WebSocket URL with streaming query parameters."""
-        params = {
-            "model": self.model,
-            "encoding": "linear16",
-            "sample_rate": self.sample_rate,
-            "channels": 1,
-            "punctuate": str(self.punctuate).lower(),
-            "diarize": str(self.diarize).lower(),
-            "smart_format": "true",
-            "numerals": "true",
-            "interim_results": str(self.interim_results).lower(),
-        }
-        if self.language:
-            params["language"] = self.language
+        Returns:
+            List of TranscriptSegment objects with speaker, text, start, end.
+        """
+        path = Path(audio_file_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"Audio file not found: {path}")
 
-        query_str = urlencode(params)
-        return f"wss://api.deepgram.com/v1/listen?{query_str}"
-
-    async def start(self) -> None:
-        """Establish WebSocket connection and start sender/receiver tasks."""
+        # If no API key, automatically delegate to Local Faster-Whisper
         if not self.api_key:
-            raise ValueError("Deepgram API Key is required for DeepgramStreamingTranscriber.")
+            logger.info(
+                "DEEPGRAM_API_KEY not configured. Running Local Faster-Whisper on full audio track..."
+            )
+            from transcribe.local_whisper import LocalWhisperFileTranscriber
+            local_transcriber = LocalWhisperFileTranscriber()
+            return local_transcriber.transcribe_file(audio_file_path, source_lang=source_lang)
 
-        if self._is_running:
-            return
-
-        try:
-            import websockets
-        except ImportError:
-            raise ImportError("Package 'websockets' is required for Deepgram streaming. Run: pip install websockets")
-
-        url = self._build_ws_url()
-        headers = {"Authorization": f"Token {self.api_key}"}
-
-        logger.info("Connecting to Deepgram streaming API (model=%s, diarize=%s)...", self.model, self.diarize)
-        self._ws = await websockets.connect(url, extra_headers=headers)
-        self._is_running = True
-
-        self._sender_task = asyncio.create_task(self._send_loop())
-        self._receiver_task = asyncio.create_task(self._receive_loop())
-        logger.info("Deepgram streaming connection established.")
-
-    async def stop(self) -> None:
-        """Close connection and stop tasks."""
-        self._is_running = False
-
-        if self._sender_task and not self._sender_task.done():
-            self._sender_task.cancel()
-        if self._receiver_task and not self._receiver_task.done():
-            self._receiver_task.cancel()
-
-        if self._ws:
-            try:
-                # Send close stream message per Deepgram spec
-                await self._ws.send(json.dumps({"type": "CloseStream"}))
-                await self._ws.close()
-            except Exception:
-                pass
-            self._ws = None
-
-        logger.info("Deepgram transcriber stopped.")
-
-    async def send_audio(self, chunk: bytes) -> None:
-        """Enqueue an audio chunk to be sent over WebSocket."""
-        if not self._is_running or not chunk:
-            return
-        try:
-            self._send_queue.put_nowait(chunk)
-        except asyncio.QueueFull:
-            try:
-                self._send_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
-            self._send_queue.put_nowait(chunk)
-
-    async def _send_loop(self) -> None:
-        """Task that transmits audio chunks to Deepgram."""
-        while self._is_running and self._ws:
-            try:
-                chunk = await self._send_queue.get()
-                await self._ws.send(chunk)
-                self._send_queue.task_done()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error("Error sending audio to Deepgram: %s", e)
-                break
-
-    async def _receive_loop(self) -> None:
-        """Task that receives and parses transcription events from Deepgram."""
-        while self._is_running and self._ws:
-            try:
-                msg = await self._ws.recv()
-                data = json.loads(msg)
-                segment = self._parse_deepgram_response(data)
-                if segment and segment.text.strip():
-                    await self._queue.put(segment)
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error("Error receiving from Deepgram: %s", e)
-                break
-
-    def _parse_deepgram_response(self, data: dict) -> Optional[TranscriptSegment]:
-        """Extract transcript and speaker identity from Deepgram JSON payload."""
-        msg_type = data.get("type")
-        if msg_type != "Results":
-            return None
-
-        channel = data.get("channel", {})
-        alternatives = channel.get("alternatives", [])
-        if not alternatives:
-            return None
-
-        alt = alternatives[0]
-        text = alt.get("transcript", "").strip()
-        if not text:
-            return None
-
-        is_final = data.get("is_final", False)
-        speech_final = data.get("speech_final", False)
-        start_time = data.get("start", 0.0)
-        duration = data.get("duration", 0.0)
-        end_time = start_time + duration
-        confidence = alt.get("confidence", 1.0)
-        words = alt.get("words", [])
-
-        # Determine dominant speaker from word-level diarization
-        speaker: Optional[int | str] = 0
-        if words:
-            speakers = [w.get("speaker") for w in words if "speaker" in w and w["speaker"] is not None]
-            if speakers:
-                speaker = Counter(speakers).most_common(1)[0][0]
-
-        return TranscriptSegment(
-            text=text,
-            speaker=speaker,
-            is_final=is_final or speech_final,
-            start=start_time,
-            end=end_time,
-            words=words,
-            confidence=confidence,
+        lang = source_lang or self.language or "multi"
+        url = (
+            f"https://api.deepgram.com/v1/listen"
+            f"?model={self.model}"
+            f"&language={lang}"
+            f"&diarize={'true' if self.diarize else 'false'}"
+            f"&smart_format={'true' if self.smart_format else 'false'}"
+            f"&punctuate={'true' if self.punctuate else 'false'}"
+            f"&utterances=true"
         )
+
+        headers = {
+            "Authorization": f"Token {self.api_key}",
+            "Content-Type": "audio/*",
+        }
+
+        try:
+            with open(path, "rb") as f:
+                audio_data = f.read()
+
+            req = urllib.request.Request(url, data=audio_data, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                resp_data = json.loads(resp.read().decode("utf-8"))
+
+            return self._parse_deepgram_response(resp_data)
+        except Exception as e:
+            logger.error("Deepgram pre-recorded transcription failed: %s", e)
+            logger.info("Falling back to Local Faster-Whisper on full audio track...")
+            from transcribe.local_whisper import LocalWhisperFileTranscriber
+            local_transcriber = LocalWhisperFileTranscriber()
+            return local_transcriber.transcribe_file(audio_file_path, source_lang=source_lang)
+
+    def _parse_deepgram_response(self, data: Dict[str, Any]) -> List[TranscriptSegment]:
+        """Parse Deepgram JSON output into list of TranscriptSegment."""
+        segments: List[TranscriptSegment] = []
+        results = data.get("results", {})
+
+        # Priority 1: results.utterances (cleanest diarized segments with start/end)
+        utterances = results.get("utterances", [])
+        if utterances:
+            for utt in utterances:
+                text = utt.get("transcript", "").strip()
+                if text:
+                    speaker = int(utt.get("speaker", 0))
+                    start = float(utt.get("start", 0.0))
+                    end = float(utt.get("end", start + 1.0))
+                    conf = float(utt.get("confidence", 1.0))
+                    segments.append(
+                        TranscriptSegment(
+                            speaker=speaker,
+                            text=text,
+                            start=round(start, 2),
+                            end=round(end, 2),
+                            confidence=round(conf, 2),
+                        )
+                    )
+            if segments:
+                return segments
+
+        # Priority 2: results.channels[0].alternatives[0].paragraphs
+        channels = results.get("channels", [])
+        if channels:
+            alt = channels[0].get("alternatives", [{}])[0]
+            paragraphs_data = alt.get("paragraphs", {}).get("paragraphs", [])
+            for p in paragraphs_data:
+                speaker = int(p.get("speaker", 0))
+                for sent in p.get("sentences", []):
+                    text = sent.get("text", "").strip()
+                    if text:
+                        start = float(sent.get("start", 0.0))
+                        end = float(sent.get("end", start + 1.0))
+                        segments.append(
+                            TranscriptSegment(
+                                speaker=speaker,
+                                text=text,
+                                start=round(start, 2),
+                                end=round(end, 2),
+                                confidence=1.0,
+                            )
+                        )
+            if segments:
+                return segments
+
+            # Fallback to single transcript if no diarization blocks found
+            transcript = alt.get("transcript", "").strip()
+            if transcript:
+                segments.append(
+                    TranscriptSegment(
+                        speaker=0,
+                        text=transcript,
+                        start=0.0,
+                        end=10.0,
+                        confidence=1.0,
+                    )
+                )
+
+        return segments
+
+    def _mock_segments(self, title_seed: str) -> List[TranscriptSegment]:
+        """Generate realistic conversational dialogue segments for demonstration."""
+        return [
+            TranscriptSegment(
+                speaker=0,
+                text="Welcome everyone to today's video presentation and discussion.",
+                start=0.5,
+                end=3.8,
+                confidence=0.98,
+            ),
+            TranscriptSegment(
+                speaker=0,
+                text="We are exploring the MemoAI architecture for Linux-based video translation.",
+                start=4.2,
+                end=8.9,
+                confidence=0.96,
+            ),
+            TranscriptSegment(
+                speaker=1,
+                text="That is impressive! How does the speaker diarization and translation pipeline operate?",
+                start=9.5,
+                end=14.3,
+                confidence=0.97,
+            ),
+            TranscriptSegment(
+                speaker=0,
+                text="The audio track is split into distinct speaker utterances, and each turn is contextually translated.",
+                start=15.0,
+                end=20.5,
+                confidence=0.95,
+            ),
+            TranscriptSegment(
+                speaker=1,
+                text="Users can also edit the translated notes directly in the web UI and export subtitles.",
+                start=21.2,
+                end=26.4,
+                confidence=0.99,
+            ),
+        ]

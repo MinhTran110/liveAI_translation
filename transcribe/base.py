@@ -12,6 +12,7 @@ class TranscriptSegment:
     """Represents a speech segment received from an ASR provider."""
 
     text: str
+    translation: str = ""
     speaker: Optional[int | str] = 0
     is_final: bool = True
     start: float = 0.0

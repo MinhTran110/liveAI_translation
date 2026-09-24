@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MemoAI — Video Translate & Notes (Linux Edition)</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- Top App Navigation -->
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-icon">●</span>
+      <h1 class="brand-title">MemoAI</h1>
+      <span class="badge">Linux Edition</span>
+    </div>
+    <div class="header-status" id="headerStatus">Sẵn sàng</div>
+  </header>
+
+  <div class="app-container">
+    <!-- Left Sidebar: Notes Library -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h2>Thư viện Ghi chú</h2>
+        <button id="btnNewNote" class="btn btn-primary btn-sm">+ Tạo mới</button>
+      </div>
+      <div class="notes-list" id="notesList">
+        <div class="empty-state">Đang tải danh sách...</div>
+      </div>
+    </aside>
+
+    <!-- Main Workspace -->
+    <main class="main-content">
+      <!-- Input / Process Card -->
+      <section class="card input-card" id="inputSection">
+        <div class="tab-nav">
+          <button class="tab-btn active" data-tab="youtubeTab">📺 Link YouTube</button>
+          <button class="tab-btn" data-tab="fileTab">📁 Tải lên File (Video / Audio)</button>
+        </div>
+
+        <!-- YouTube Tab -->
+        <div class="tab-pane active" id="youtubeTab">
+          <div class="form-group">
+            <label for="ytUrl">Đường dẫn YouTube:</label>
+            <input type="text" id="ytUrl" placeholder="https://www.youtube.com/watch?v=..." class="form-control">
+          </div>
+        </div>
+
+        <!-- File Upload Tab -->
+        <div class="tab-pane" id="fileTab">
+          <div class="form-group">
+            <label>Chọn file từ máy tính:</label>
+            <div class="dropzone" id="dropzone">
+              <input type="file" id="fileInput" accept="video/*,audio/*" class="file-hidden">
+              <div class="dropzone-text" id="dropzoneText">
+                Kéo thả file vào đây hoặc <span class="highlight">Bấm để chọn file</span>
+                <div class="subtext">Hỗ trợ: MP4, MKV, WebM, MP3, WAV, M4A, FLAC</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Settings Row -->
+        <div class="settings-row">
+          <div class="setting-item">
+            <label for="sourceLang">Ngôn ngữ nguồn:</label>
+            <select id="sourceLang" class="form-control">
+              <option value="auto">Tự động (Auto)</option>
+              <option value="ja">Tiếng Nhật (ja)</option>
+              <option value="en">Tiếng Anh (en)</option>
+              <option value="zh">Tiếng Trung (zh)</option>
+              <option value="ko">Tiếng Hàn (ko)</option>
+              <option value="vi">Tiếng Việt (vi)</option>
+              <option value="fr">Tiếng Pháp (fr)</option>
+              <option value="de">Tiếng Đức (de)</option>
+              <option value="es">Tiếng Tây Ban Nha (es)</option>
+            </select>
+          </div>
+
+          <div class="setting-item">
+            <label for="targetLang">Dịch sang:</label>
+            <select id="targetLang" class="form-control">
+              <option value="vi" selected>Tiếng Việt (vi)</option>
+              <option value="en">English (en)</option>
+              <option value="ja">Tiếng Nhật (ja)</option>
+              <option value="zh">Tiếng Trung (zh)</option>
+              <option value="ko">Tiếng Hàn (ko)</option>
+              <option value="fr">Français (fr)</option>
+            </select>
+          </div>
+
+          <div class="setting-item">
+            <label for="asrEngine">Công nghệ nhận diện:</label>
+            <select id="asrEngine" class="form-control">
+              <option value="local" selected>Local Faster-Whisper (Ngoại tuyến, Miễn phí, 100% video)</option>
+              <option value="deepgram">Cloud Deepgram (Cần DEEPGRAM_API_KEY trong .env)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Action Button -->
+        <div class="action-row">
+          <button id="btnProcess" class="btn btn-success btn-lg">🚀 Bắt đầu Dịch & Tạo Ghi chú</button>
+        </div>
+
+        <!-- Processing Progress Box -->
+        <div class="progress-box hidden" id="progressBox">
+          <div class="spinner"></div>
+          <div class="progress-text" id="progressText">Đang tải và xử lý âm thanh...</div>
+        </div>
+      </section>
+
+      <!-- Note Viewer / Editor Section -->
+      <section class="card note-viewer hidden" id="noteViewer">
+        <div class="note-header">
+          <div class="note-info">
+            <h2 id="viewNoteTitle">Tiêu đề ghi chú</h2>
+            <div class="note-meta" id="viewNoteMeta">Thời lượng: 00:00 | Nguồn: AUTO → VI</div>
+          </div>
+          <div class="export-actions">
+            <button id="btnExportSrt" class="btn btn-secondary btn-sm">📥 Xuất SRT</button>
+            <button id="btnExportVtt" class="btn btn-secondary btn-sm">📥 Xuất VTT</button>
+            <button id="btnExportMd" class="btn btn-secondary btn-sm">📥 Xuất Markdown</button>
+            <button id="btnDeleteNote" class="btn btn-danger btn-sm">🗑 Xóa</button>
+          </div>
+        </div>
+
+        <!-- Transcript & Segment List -->
+        <div class="segments-container" id="segmentsContainer">
+          <!-- Filled dynamically by app.js -->
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,5 +1,5 @@
-"""Translation module for live-voice-translate."""
+"""Translation package with LLM and online translation services."""
 
-from translate.llm_translator import ConversationTurn, LLMTranslator
+from translate.llm_translator import LLMTranslator
 
-__all__ = ["LLMTranslator", "ConversationTurn"]
+__all__ = ["LLMTranslator"]

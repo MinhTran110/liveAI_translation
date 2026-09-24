@@ -1,397 +1,373 @@
-"""Main entry point for live-voice-translate.
-
-Workflow:
-1. scan_system() -> prints RAM/CPU/GPU/Disk specs
-2. suggest_model() -> suggests optimal model (tiny/base/... or cloud Deepgram)
-3. get_audio_backend() -> auto-selects audio loopback backend based on OS
-4. Initializes TranscriberBase (Deepgram or LocalWhisper)
-5. pipeline.run() -> coordinates audio -> transcribe -> segment_buffer -> translate -> UI
+"""Main entry point for MemoAI Video Translate & Notes.
+Starts the FastAPI server and serves the local web application.
 """
 
 import argparse
-import asyncio
 import logging
 import os
-import platform
-import signal
-import sys
-import threading
-import time
 from pathlib import Path
-from typing import Optional
+import sys
+from typing import Any, Optional
 
-# Ensure dependencies in local virtualenv are discoverable across all Python environments
-_project_root = Path(__file__).resolve().parent
-for _candidate_venv in [
-    _project_root / "venv" / "lib" / "python3.11" / "site-packages",
-    _project_root / "venv" / "lib" / "python3.12" / "site-packages",
-]:
-    if _candidate_venv.is_dir() and str(_candidate_venv) not in sys.path:
-        sys.path.insert(0, str(_candidate_venv))
+from config import load_config
+from storage.db import init_db
+from transcribe.model_selector import scan_system, suggest_model
 
-from audio.backend_selector import get_audio_backend
-from config import AppConfig, load_config
-from core.pipeline import TranslationPipeline
-from core.segment_buffer import SegmentBuffer
-from transcribe.base import MockTranscriber, TranscriberBase
-from transcribe.deepgram_client import DeepgramStreamingTranscriber
-from transcribe.local_whisper import LocalWhisperTranscriber
-from transcribe.model_selector import print_system_specs, scan_system, suggest_model
-from translate.llm_translator import LLMTranslator
-from ui.terminal_window import TerminalWindow
-
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
 )
-logger = logging.getLogger("main")
+logger = logging.getLogger("memoai")
 
+# Ensure required runtime directories exist
+BASE_DIR = Path(__file__).resolve().parent
 
-def parse_args() -> argparse.Namespace:
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Live Voice Translate - Real-time system audio translation with diarization."
-    )
-    parser.add_argument(
-        "--scan-only",
-        action="store_true",
-        help="Scan host hardware, display model recommendation, and exit.",
-    )
-    parser.add_argument(
-        "--provider",
-        choices=["deepgram", "local", "mock"],
-        default=None,
-        help="ASR provider override (deepgram, local, or mock).",
-    )
-    parser.add_argument(
-        "--model",
-        default=None,
-        help="Whisper model name override (e.g. tiny, base, small, medium, large-v3).",
-    )
-    parser.add_argument(
-        "--target-lang",
-        default=None,
-        help="Target translation language code (e.g. vi, en, ja, es).",
-    )
-    parser.add_argument(
-        "--source-lang",
-        default=None,
-        help="Source audio language code (e.g. auto, en, multi).",
-    )
-    parser.add_argument(
-        "--mock-audio",
-        action="store_true",
-        help="Use synthetic mock audio capture instead of system hardware loopback.",
-    )
-    parser.add_argument(
-        "--demo",
-        action="store_true",
-        help="Run in demonstration mode with simulated speech and translations.",
-    )
-    parser.add_argument(
-        "--headless",
-        action="store_true",
-        help="Run in console headless mode without Tkinter GUI window.",
-    )
-    parser.add_argument(
-        "-y",
-        "--yes",
-        action="store_true",
-        help="Auto-confirm recommended model and configuration without prompting.",
-    )
-    parser.add_argument(
-        "--audio-source",
-        type=str,
-        choices=["both", "mic", "system"],
-        default=None,
-        help="Audio capture source: 'both' (mix mic + system), 'mic' (microphone), or 'system' (system output).",
-    )
-    parser.add_argument(
-        "--duration",
-        type=float,
-        default=None,
-        help="Run for N seconds then automatically stop (useful for tests/benchmarks).",
-    )
-    return parser.parse_args()
-
-
-def init_transcriber(
-    provider: str,
-    config: AppConfig,
-    whisper_model: str,
-    device: str,
-    compute_type: str,
-    demo: bool = False,
-) -> TranscriberBase:
-    """Instantiate appropriate speech-to-text transcriber."""
-    if demo or provider == "mock":
-        logger.info("Initializing MockTranscriber for demonstration/testing (auto_emit=%s).", demo)
-        return MockTranscriber(sample_rate=config.sample_rate, language=config.source_language, auto_emit=demo)
-
-    if provider == "deepgram":
-        if not config.deepgram_api_key:
-            logger.warning(
-                "DEEPGRAM_API_KEY is not set in .env! Staying silent until configured. "
-                "Add your Deepgram key to .env for real cloud transcription."
-            )
-            return MockTranscriber(sample_rate=config.sample_rate, language=config.source_language, auto_emit=False)
-
-        logger.info("Initializing DeepgramStreamingTranscriber (Nova-2)...")
-        return DeepgramStreamingTranscriber(
-            api_key=config.deepgram_api_key,
-            sample_rate=config.sample_rate,
-            language=config.source_language,
-            punctuate=True,
-            diarize=True,
-            interim_results=True,
-        )
-
-    # Local faster-whisper
+# Auto-switch to workspace virtual environment if available and not already in it
+_venv_python = BASE_DIR / "venv" / "bin" / "python3"
+if _venv_python.exists() and sys.executable != str(_venv_python.resolve()) and "MEMOAI_NO_REEXEC" not in os.environ:
+    os.environ["MEMOAI_NO_REEXEC"] = "1"
     try:
-        import faster_whisper  # noqa: F401
-
-        logger.info("Initializing LocalWhisperTranscriber (model=%s, device=%s)...", whisper_model, device)
-        return LocalWhisperTranscriber(
-            model_size=whisper_model,
-            device=device,
-            compute_type=compute_type,
-            download_root=config.models_cache_dir,
-            sample_rate=config.sample_rate,
-            language=config.source_language,
-        )
-    except ImportError:
-        logger.warning(
-            "faster-whisper is not installed. Staying silent until installed. "
-            "Install faster-whisper via: pip install faster-whisper"
-        )
-        return MockTranscriber(sample_rate=config.sample_rate, language=config.source_language, auto_emit=False)
-
-
-async def async_main(
-    pipeline: TranslationPipeline,
-    terminal_window: TerminalWindow,
-    duration: Optional[float] = None,
-) -> None:
-    """Async main event loop."""
-    await pipeline.start()
-
-    terminal_window.set_status("Listening & Translating...")
-
-    start_time = time.time()
-    try:
-        while pipeline.is_running:
-            await asyncio.sleep(0.5)
-            if duration and (time.time() - start_time >= duration):
-                logger.info("Reached specified duration of %.1f seconds. Stopping...", duration)
-                break
-    except (asyncio.CancelledError, KeyboardInterrupt):
-        pass
-    finally:
-        await pipeline.stop()
-        terminal_window.set_status("Stopped")
-
-
-def can_display_gui() -> bool:
-    """Test whether graphical display is reachable for Tkinter."""
-    try:
-        import tkinter as tk
-
-        test_root = tk.Tk()
-        test_root.withdraw()
-        test_root.destroy()
-        return True
+        os.execv(str(_venv_python), [str(_venv_python)] + sys.argv)
     except Exception:
-        return False
+        pass
+
+for sub in ["data", "uploads", "downloads", "web"]:
+    (BASE_DIR / sub).mkdir(parents=True, exist_ok=True)
+
+# Initialize SQLite database schema
+init_db()
 
 
-def main() -> None:
-    """Main application lifecycle."""
-    args = parse_args()
+def create_fastapi_app():
+    """Instantiate and configure the FastAPI application."""
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+    from api.routes import create_router
+
+    app = FastAPI(
+        title="MemoAI — Video Translate & Notes",
+        description="Linux-optimized video/audio transcription, diarization, and notes translator.",
+        version="2.0.0",
+    )
+
+    # Enable CORS for all origins
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # Mount static assets
+    web_dir = BASE_DIR / "web"
+    app.mount("/static", StaticFiles(directory=str(web_dir)), name="static")
+
+    # Mount API routes
+    app.include_router(create_router(), prefix="/api")
+
+    # Serve index.html at root
+    @app.get("/")
+    async def serve_index():
+        return FileResponse(str(web_dir / "index.html"))
+
+    return app
+
+
+def run_builtin_fallback_server(host: str, port: int):
+    """Fallback standard HTTP server if FastAPI/Uvicorn is not yet installed."""
+    import http.server
+    import json
+    import urllib.parse
+    import email
+    from storage.db import get_notes, get_note, delete_note, update_segment_translation
+    from export.srt_exporter import export_srt
+    from export.vtt_exporter import export_vtt
+    from export.markdown_exporter import export_markdown
+
+    class MemoAIHandler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(BASE_DIR / "web"), **kwargs)
+
+        def end_headers(self):
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+            super().end_headers()
+
+        def do_OPTIONS(self):
+            self.send_response(200)
+            self.end_headers()
+
+        def do_GET(self):
+            parsed = urllib.parse.urlparse(self.path)
+            path = parsed.path
+            params = urllib.parse.parse_qs(parsed.query)
+
+            if path in ("", "/"):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                with open(BASE_DIR / "web" / "index.html", "rb") as f:
+                    self.wfile.write(f.read())
+                return
+
+            if path.startswith("/static/"):
+                filepath = BASE_DIR / "web" / path.replace("/static/", "")
+                if filepath.is_file():
+                    self.send_response(200)
+                    if filepath.suffix == ".css":
+                        self.send_header("Content-Type", "text/css")
+                    elif filepath.suffix == ".js":
+                        self.send_header("Content-Type", "application/javascript")
+                    self.end_headers()
+                    with open(filepath, "rb") as f:
+                        self.wfile.write(f.read())
+                    return
+
+            if path == "/api/notes":
+                notes = get_notes()
+                self._send_json(notes)
+                return
+
+            if path.startswith("/api/notes/"):
+                try:
+                    nid = int(path.split("/")[-1])
+                    note = get_note(nid)
+                    if note:
+                        self._send_json(note)
+                    else:
+                        self._send_error_json(404, "Note not found")
+                except ValueError:
+                    self._send_error_json(400, "Invalid note ID")
+                return
+
+            if path.startswith("/api/export/"):
+                try:
+                    nid = int(path.split("/")[-1])
+                    note = get_note(nid)
+                    if not note:
+                        self._send_error_json(404, "Note not found")
+                        return
+                    fmt = params.get("format", ["srt"])[0].lower()
+                    title = "".join(c for c in note.get("title", "note") if c.isalnum() or c in (" ", "_", "-")).strip().replace(" ", "_")
+
+                    if fmt == "vtt":
+                        content = export_vtt(note["segments"]).encode("utf-8")
+                        mtype = "text/vtt; charset=utf-8"
+                        fname = f"{title}.vtt"
+                    elif fmt in ("markdown", "md"):
+                        content = export_markdown(note).encode("utf-8")
+                        mtype = "text/markdown; charset=utf-8"
+                        fname = f"{title}.md"
+                    else:
+                        content = export_srt(note["segments"]).encode("utf-8")
+                        mtype = "text/plain; charset=utf-8"
+                        fname = f"{title}.srt"
+
+                    self.send_response(200)
+                    self.send_header("Content-Type", mtype)
+                    self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+                    self.end_headers()
+                    self.wfile.write(content)
+                except Exception as e:
+                    self._send_error_json(500, str(e))
+                return
+
+            super().do_GET()
+
+        def do_POST(self):
+            parsed = urllib.parse.urlparse(self.path)
+            path = parsed.path
+
+            if path == "/api/upload":
+                try:
+                    content_type = self.headers.get("Content-Type", "")
+                    length = int(self.headers.get("Content-Length", 0))
+                    body_bytes = self.rfile.read(length)
+
+                    from ingest.file_handler import process_uploaded_file, UPLOADS_DIR
+                    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+                    filename = "uploaded_file.mp3"
+                    file_bytes = body_bytes
+
+                    if "boundary=" in content_type:
+                        msg = email.message_from_bytes(f"Content-Type: {content_type}\r\n\r\n".encode("utf-8") + body_bytes)
+                        for part in msg.walk():
+                            fn = part.get_filename()
+                            if fn:
+                                filename = fn
+                                payload = part.get_payload(decode=True)
+                                if payload:
+                                    file_bytes = payload
+                                break
+
+                    dest = UPLOADS_DIR / filename
+                    with open(dest, "wb") as f:
+                        f.write(file_bytes)
+
+                    info = process_uploaded_file(dest, original_filename=filename)
+                    self._send_json({"status": "success", "file_info": info})
+                    return
+                except Exception as e:
+                    self._send_error_json(500, str(e))
+                    return
+
+            if path == "/api/process":
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    body = json.loads(self.rfile.read(length).decode("utf-8"))
+
+                    from ingest.youtube_downloader import download_youtube_audio
+                    from ingest.file_handler import process_uploaded_file
+                    from storage.db import create_note, add_segments
+                    from transcribe.deepgram_client import DeepgramPreRecordedTranscriber
+                    from translate.llm_translator import LLMTranslator
+
+                    source_type = body.get("source_type", "youtube")
+                    url = body.get("url")
+                    file_path = body.get("file_path")
+                    source_lang = body.get("source_lang", "auto")
+                    target_lang = body.get("target_lang", "vi")
+
+                    if source_type == "youtube":
+                        ingest_info = download_youtube_audio(url)
+                    else:
+                        ingest_info = process_uploaded_file(file_path)
+
+                    transcriber = DeepgramPreRecordedTranscriber()
+                    raw_segments = transcriber.transcribe_file(ingest_info["audio_path"], source_lang=source_lang)
+
+                    translator = LLMTranslator(target_language=target_lang, source_language=source_lang)
+                    trans_segments = translator.translate_segments(raw_segments, target_lang=target_lang)
+
+                    nid = create_note(
+                        title=ingest_info["title"],
+                        source_type=source_type,
+                        source_url=url,
+                        file_path=ingest_info["audio_path"],
+                        duration=ingest_info["duration"],
+                        source_lang=source_lang,
+                        target_lang=target_lang,
+                    )
+                    add_segments(nid, trans_segments)
+                    self._send_json(get_note(nid))
+                    return
+                except Exception as e:
+                    logger.error("Processing error: %s", e)
+                    self._send_error_json(500, str(e))
+                    return
+
+            self._send_error_json(404, "Endpoint not found")
+
+        def do_PUT(self):
+            parsed = urllib.parse.urlparse(self.path)
+            if parsed.path.startswith("/api/segments/"):
+                try:
+                    sid = int(parsed.path.split("/")[-1])
+                    length = int(self.headers.get("Content-Length", 0))
+                    body = json.loads(self.rfile.read(length).decode("utf-8"))
+                    trans = body.get("translation", "")
+                    update_segment_translation(sid, trans)
+                    self._send_json({"status": "success", "id": sid, "translation": trans})
+                    return
+                except Exception as e:
+                    self._send_error_json(500, str(e))
+                    return
+
+            self._send_error_json(404, "Endpoint not found")
+
+        def do_DELETE(self):
+            parsed = urllib.parse.urlparse(self.path)
+            if parsed.path.startswith("/api/notes/"):
+                try:
+                    nid = int(parsed.path.split("/")[-1])
+                    delete_note(nid)
+                    self._send_json({"status": "success", "id": nid})
+                    return
+                except Exception as e:
+                    self._send_error_json(500, str(e))
+                    return
+            self._send_error_json(404, "Endpoint not found")
+
+        def _send_json(self, data: Any):
+            content = json.dumps(data).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
+        def _send_error_json(self, status: int, msg: str):
+            content = json.dumps({"detail": msg}).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
+    logger.info("Serving MemoAI Web UI on: http://%s:%d (built-in server)", host, port)
+    server = http.server.ThreadingHTTPServer((host, port), MemoAIHandler)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        logger.info("Server stopped.")
+
+
+def main():
+    """Main CLI entry point."""
+    parser = argparse.ArgumentParser(description="MemoAI Video Translate & Notes Server")
+    parser.add_argument("--host", default=None, help="Server host (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=None, help="Server port (default: 8000)")
+    parser.add_argument("--scan-only", action="store_true", help="Print system hardware specs and exit.")
+    args = parser.parse_args()
+
     config = load_config()
-
-    # Apply command-line overrides
-    if args.target_lang:
-        config.target_language = args.target_lang
-    if args.source_lang:
-        config.source_language = args.source_lang
-    if args.audio_source:
-        config.audio_source = args.audio_source
+    host = args.host or config.host
+    port = args.port or config.port
 
     print("\n" + "=" * 65)
-    print("        LIVE VOICE TRANSLATE — REAL-TIME DIARIZATION         ")
+    print("      MEMOAI — VIDEO TRANSLATE & NOTES (LINUX EDITION)       ")
     print("=" * 65 + "\n")
 
-    # 1. Scan System Hardware
-    logger.info("Scanning system hardware capabilities...")
+    logger.info("Scanning Linux hardware capabilities...")
     specs = scan_system(cache_path=config.models_cache_dir)
+    rec = suggest_model(specs)
 
-    # 2. Suggest Optimal Model
-    recommendation = suggest_model(specs)
-    print_system_specs(specs, recommendation)
+    logger.info(
+        "Hardware: RAM=%.1fGB | CPU=%s (%d Cores) | Suggested ASR=%s",
+        specs.ram_total_gb,
+        specs.cpu_model,
+        specs.cpu_physical_cores,
+        rec.recommended_provider.upper(),
+    )
 
     if args.scan_only:
         print("\nScan complete. Exiting (--scan-only specified).")
         return
 
-    # Determine chosen provider and model
-    selected_provider = args.provider or config.transcriber_provider
-    selected_model = args.model or config.whisper_model
-    selected_device = config.whisper_device
-    selected_compute = config.whisper_compute_type
+    # Check for FastAPI & Uvicorn
+    try:
+        import uvicorn
+        from fastapi import FastAPI
 
-    # If user hasn't overridden and hasn't explicitly configured, adopt system recommendation
-    if not args.provider and not os.getenv("TRANSCRIBER_PROVIDER"):
-        selected_provider = recommendation.recommended_provider
-        selected_model = recommendation.model_name
-        selected_device = recommendation.device
-        selected_compute = recommendation.compute_type
-
-    logger.info(
-        "Active Configuration: Provider=%s | Model=%s | Device=%s | AudioSource=%s | TargetLang=%s",
-        selected_provider.upper(),
-        selected_model,
-        selected_device,
-        config.audio_source.upper(),
-        config.target_language,
-    )
-
-    # 3. Audio Backend
-    use_mock_audio = args.mock_audio or args.demo
-    audio_backend = get_audio_backend(
-        sample_rate=config.sample_rate,
-        channels=config.channels,
-        chunk_size=config.chunk_size,
-        mock=use_mock_audio,
-        synthetic_pattern="ambient" if args.demo else "silence",
-        audio_source=config.audio_source,
-        sink_name=config.sink_name,
-        source_name=config.source_name,
-    )
-
-    # 4. Transcriber Base
-    transcriber = init_transcriber(
-        provider=selected_provider,
-        config=config,
-        whisper_model=selected_model,
-        device=selected_device,
-        compute_type=selected_compute,
-        demo=args.demo,
-    )
-
-    # Segment Buffer & LLM Translator
-    segment_buffer = SegmentBuffer(
-        min_words=config.min_words,
-        max_words=config.max_words,
-        max_wait_seconds=config.max_wait_seconds,
-    )
-
-    translator_key = (
-        config.anthropic_api_key
-        if config.translator_provider == "anthropic"
-        else config.openai_api_key
-    )
-    translator = LLMTranslator(
-        provider=config.translator_provider,
-        api_key=translator_key,
-        source_language=config.source_language,
-        target_language=config.target_language,
-    )
-
-    # 5. Language and Audio change handlers
-    def handle_source_language_change(new_src: str) -> None:
-        transcriber.set_language(new_src)
-        translator.set_source_language(new_src)
-        logger.info("Switched source language to: %s", new_src)
-
-    def handle_target_language_change(new_tgt: str) -> None:
-        translator.set_target_language(new_tgt)
-        logger.info("Switched target language to: %s", new_tgt)
-
-    def handle_audio_source_change(new_source: str) -> None:
-        config.audio_source = new_source
-        if hasattr(audio_backend, "set_audio_source"):
-            audio_backend.set_audio_source(new_source)
-        logger.info("Switched audio capture source to: %s", new_source)
-
-    # 6. UI Window Initialization
-    status_str = f"[{selected_provider.upper()}] | {config.source_language.upper()} → {config.target_language.upper()}"
-    source_labels = {"both": "CẢ HAI (MIX)", "mic": "MICROPHONE", "system": "HỆ THỐNG"}
-    audio_label = source_labels.get(config.audio_source, config.audio_source.upper())
-
-    terminal_window = TerminalWindow(
-        title=f"Live Voice Translate ({status_str})",
-        status_info=f"Sẵn sàng | Nguồn âm: {audio_label}",
-        source_language=config.source_language,
-        target_language=config.target_language,
-        audio_source=config.audio_source,
-        on_source_language_change=handle_source_language_change,
-        on_language_change=handle_target_language_change,
-        on_audio_source_change=handle_audio_source_change,
-        audio_volume_provider=audio_backend.get_current_volume,
-    )
-
-    if hasattr(transcriber, "set_language_callback"):
-        transcriber.set_language_callback(terminal_window.set_detected_language)
-
-    # Build Pipeline with render callback and interim streaming into UI
-    pipeline = TranslationPipeline(
-        audio_capture=audio_backend,
-        transcriber=transcriber,
-        segment_buffer=segment_buffer,
-        translator=translator,
-        render_callback=terminal_window.render,
-        interim_render_callback=terminal_window.render_interim,
-    )
-
-    if args.demo:
-        terminal_window.render(
-            "Demo",
-            "Đang chạy kịch bản hội thoại mẫu (giả lập) để thử nghiệm giao diện và màu sắc speaker...",
-            "Running simulated demo script for testing UI and speaker colors.",
+        logger.info("FastAPI & Uvicorn detected. Starting ASGI web server...")
+        app = create_fastapi_app()
+        display_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+        logger.info("Opening MemoAI at: http://%s:%d", display_host, port)
+        uvicorn.run(app, host=host, port=port, log_level="info")
+    except ImportError:
+        logger.warning(
+            "FastAPI or Uvicorn not installed in current environment. "
+            "Running with built-in zero-dependency HTTP server."
         )
-    else:
-        terminal_window.render(
-            "System",
-            "Sẵn sàng! Đang lắng nghe âm thanh phát ra từ hệ thống (Chrome/YouTube/VLC)...",
-            "Ready! Listening to system audio output. Play any video to see live subtitles.",
-        )
-
-    # If headless requested, or running in an environment without working display
-    is_headless = args.headless or (not can_display_gui())
-
-    if is_headless:
-        # Run console fallback directly in main thread
-        ui_thread = threading.Thread(target=terminal_window._run_fallback_loop, daemon=True)
-        ui_thread.start()
-        try:
-            asyncio.run(async_main(pipeline, terminal_window, duration=args.duration))
-        except KeyboardInterrupt:
-            logger.info("Keyboard interrupt received. Exiting...")
-        finally:
-            terminal_window.close()
-    else:
-        # Launch Tkinter GUI in main thread and asyncio pipeline in background thread
-        def run_async_loop():
-            try:
-                asyncio.run(async_main(pipeline, terminal_window, duration=args.duration))
-            except Exception as e:
-                logger.error("Fatal error in audio translation pipeline: %s", e, exc_info=True)
-                terminal_window.set_status(f"Lỗi: {e}")
-
-        async_thread = threading.Thread(target=run_async_loop, daemon=True)
-        async_thread.start()
-
-        # Run Tkinter mainloop on main thread
-        try:
-            terminal_window.run()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            terminal_window.close()
-
-    print("\n[Live Voice Translate] Application shutdown complete.")
+        display_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+        logger.info("Opening MemoAI at: http://%s:%d", display_host, port)
+        run_builtin_fallback_server(host, port)
 
 
 if __name__ == "__main__":

@@ -1,24 +1,44 @@
-# Environment variables
-.env
-
-# Virtual environment
-venv/
-.venv/
-env/
-
-# Python cache
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
-.pytest_cache/
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Model cache & data
-models_cache/
-*.pcm
-*.wav
-*.mp3
+# Data and user files
+data/*.db
+data/*.sqlite
+uploads/*
+downloads/*
+!uploads/.gitkeep
+!downloads/.gitkeep
+!data/.gitkeep
+
+# Environment variables
+.env
+.env.local
 
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+
+# Models cache
+models_cache/
