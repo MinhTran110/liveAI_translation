@@ -221,3 +221,30 @@ Today we will explore AI agents.
     assert json3_segments[0].text == "Hello world!"
     assert json3_segments[1].text == "This is a native subtitle test."
 
+
+def test_clean_youtube_url_and_merge_sentence_segments():
+    """Test URL sanitization and CJK/Latin sentence merging."""
+    from ingest.youtube_downloader import clean_youtube_url
+    from transcribe.youtube_subtitles import merge_sentence_segments
+
+    # 1. URL cleaner
+    dirty_url = "https://www.youtube.com/watch?v=wMuDsubGMXE&list=RDwMuDsubGMXE&start_radio=1"
+    assert clean_youtube_url(dirty_url) == "https://www.youtube.com/watch?v=wMuDsubGMXE"
+
+    short_url = "https://youtu.be/wMuDsubGMXE?si=test123"
+    assert clean_youtube_url(short_url) == "https://www.youtube.com/watch?v=wMuDsubGMXE"
+
+    # 2. Sentence merger for Japanese/CJK
+    jp_raw = [
+        TranscriptSegment(speaker=0, text="懐かしい", start=12.0, end=15.0),
+        TranscriptSegment(speaker=0, text="歌が聞こえた。", start=15.2, end=18.0),
+        TranscriptSegment(speaker=0, text="君の笑顔。", start=18.5, end=21.0),
+    ]
+    jp_merged = merge_sentence_segments(jp_raw)
+    assert len(jp_merged) == 2
+    assert jp_merged[0].text == "懐かしい歌が聞こえた。"
+    assert jp_merged[0].start == 12.0
+    assert jp_merged[0].end == 18.0
+    assert jp_merged[1].text == "君の笑顔。"
+
+

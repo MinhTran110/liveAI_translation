@@ -247,6 +247,9 @@ def run_builtin_fallback_server(host: str, port: int):
                             self._send_error_json(400, "Missing YouTube URL.")
                             return
 
+                        from ingest.youtube_downloader import clean_youtube_url
+                        url = clean_youtube_url(url)
+
                         if engine in ("youtube_sub", "auto", ""):
                             subs, meta = fetch_youtube_subtitles(url, preferred_lang=source_lang)
                             if subs:

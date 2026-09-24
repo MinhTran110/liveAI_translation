@@ -31,6 +31,39 @@ def extract_youtube_id(url: str) -> Optional[str]:
     return None
 
 
+def clean_youtube_url(url: str) -> str:
+    """Normalize YouTube URL to single video URL, stripping playlist & tracking query params."""
+    if not url:
+        return url
+    match = re.search(r"(?:v=|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})", url)
+    if match:
+        video_id = match.group(1)
+        return f"https://www.youtube.com/watch?v={video_id}"
+    return url
+
+
+def get_js_runtime_config():
+    """Detect available JS runtime (Node, Deno, Bun, QuickJS) and patch yt-dlp."""
+    try:
+        import yt_dlp.utils._jsruntime as _jsr
+        if hasattr(_jsr, "NodeJsRuntime"):
+            _jsr.NodeJsRuntime.MIN_SUPPORTED_VERSION = (16, 0, 0)
+    except Exception:
+        pass
+
+    import shutil
+    for runtime in ["node", "deno", "bun", "quickjs"]:
+        path = shutil.which(runtime)
+        if not path and runtime == "node":
+            if os.path.exists("/usr/bin/node"):
+                path = "/usr/bin/node"
+            elif os.path.exists("/usr/bin/nodejs"):
+                path = "/usr/bin/nodejs"
+        if path:
+            return {"js_runtimes": {runtime: {"path": path}}}, ["--js-runtimes", f"{runtime}:{path}"]
+    return {}, []
+
+
 def download_youtube_audio(url: str, output_dir: Optional[Path] = None) -> Dict[str, Any]:
     """Download audio track from a YouTube URL and convert to standardized audio.
 
@@ -41,6 +74,7 @@ def download_youtube_audio(url: str, output_dir: Optional[Path] = None) -> Dict[
     Returns:
         Dict with keys: audio_path, title, duration, source_url
     """
+    url = clean_youtube_url(url)
     target_dir = output_dir or DOWNLOADS_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -62,6 +96,7 @@ def download_youtube_audio(url: str, output_dir: Optional[Path] = None) -> Dict[
 
     import shutil
     has_ffmpeg = bool(shutil.which("ffmpeg"))
+    ydl_dict, cli_js_flags = get_js_runtime_config()
 
     # 1. Attempt using yt_dlp python module if installed
     try:
@@ -72,6 +107,8 @@ def download_youtube_audio(url: str, output_dir: Optional[Path] = None) -> Dict[
             "outtmpl": str(target_dir / "%(id)s.%(ext)s"),
             "quiet": True,
             "no_warnings": True,
+            "noplaylist": True,
+            **ydl_dict,
         }
 
         # Only request ffmpeg conversion if ffmpeg binary exists
@@ -123,9 +160,11 @@ def download_youtube_audio(url: str, output_dir: Optional[Path] = None) -> Dict[
     if cli_path:
         cmd = [
             cli_path,
+            "--no-playlist",
             "-f", "bestaudio/best",
             "-o", str(target_dir / "%(id)s.%(ext)s"),
             "--print", "%(id)s|||%(title)s|||%(duration)s",
+            *cli_js_flags,
             url,
         ]
         if has_ffmpeg:

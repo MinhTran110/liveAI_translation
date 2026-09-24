@@ -1,15 +1,101 @@
-"""YouTube native transcript and subtitle extractor (official and auto-captions)."""
-
 import json
 import logging
+import os
 from pathlib import Path
 import re
+import shutil
 from typing import Any, Dict, List, Optional, Tuple
 import urllib.request
 
 from transcribe.base import TranscriptSegment
 
 logger = logging.getLogger(__name__)
+
+
+def clean_youtube_url(url: str) -> str:
+    """Normalize YouTube URL to single video URL, stripping playlist & tracking query params."""
+    if not url:
+        return url
+    match = re.search(r"(?:v=|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})", url)
+    if match:
+        video_id = match.group(1)
+        return f"https://www.youtube.com/watch?v={video_id}"
+    return url
+
+
+def get_js_runtime_config():
+    """Detect available JS runtime (Node, Deno, Bun, QuickJS) and patch yt-dlp."""
+    try:
+        import yt_dlp.utils._jsruntime as _jsr
+        if hasattr(_jsr, "NodeJsRuntime"):
+            _jsr.NodeJsRuntime.MIN_SUPPORTED_VERSION = (16, 0, 0)
+    except Exception:
+        pass
+
+    for runtime in ["node", "deno", "bun", "quickjs"]:
+        path = shutil.which(runtime)
+        if not path and runtime == "node":
+            if os.path.exists("/usr/bin/node"):
+                path = "/usr/bin/node"
+            elif os.path.exists("/usr/bin/nodejs"):
+                path = "/usr/bin/nodejs"
+        if path:
+            return {"js_runtimes": {runtime: {"path": path}}}, ["--js-runtimes", f"{runtime}:{path}"]
+    return {}, []
+
+
+def merge_sentence_segments(
+    segments: List[TranscriptSegment],
+    max_gap: float = 1.5,
+    max_len: int = 140,
+) -> List[TranscriptSegment]:
+    """Merge short spoken/lyric fragments into grammatically coherent sentences for translation."""
+    if not segments:
+        return []
+    merged: List[TranscriptSegment] = []
+    curr: Optional[TranscriptSegment] = None
+    enders = {".", "!", "?", "。", "！", "？", "…"}
+
+    for seg in segments:
+        text = seg.text.strip()
+        if not text:
+            continue
+        if curr is None:
+            curr = TranscriptSegment(
+                speaker=seg.speaker,
+                text=text,
+                start=seg.start,
+                end=seg.end,
+                confidence=seg.confidence,
+            )
+            continue
+
+        prev_has_ender = any(curr.text.endswith(e) for e in enders)
+        gap = seg.start - curr.end
+        can_merge = (
+            seg.speaker == curr.speaker
+            and not prev_has_ender
+            and gap <= max_gap
+            and (len(curr.text) + len(text)) <= max_len
+        )
+
+        if can_merge:
+            is_cjk = any("\u3000" <= c <= "\u9fff" for c in curr.text[-1] + text[0])
+            sep = "" if is_cjk else " "
+            curr.text = curr.text + sep + text
+            curr.end = max(curr.end, seg.end)
+        else:
+            merged.append(curr)
+            curr = TranscriptSegment(
+                speaker=seg.speaker,
+                text=text,
+                start=seg.start,
+                end=seg.end,
+                confidence=seg.confidence,
+            )
+    if curr:
+        merged.append(curr)
+    return merged
 
 
 def _vtt_time_to_seconds(time_str: str) -> float:
@@ -41,15 +127,24 @@ def parse_vtt_subtitles(vtt_text: str) -> List[TranscriptSegment]:
             if m:
                 start = _vtt_time_to_seconds(m.group(1))
                 end = _vtt_time_to_seconds(m.group(2))
-                raw_content = " ".join(lines[idx + 1 :]).strip()
-                # Clean html tags & entities
-                clean = re.sub(r"<[^>]+>", "", raw_content)
-                clean = clean.replace("&nbsp;", " ").replace("&amp;", "&").strip()
+                content_lines = lines[idx + 1 :]
+                cleaned_lines = []
+                for cl in content_lines:
+                    c = re.sub(r"<[^>]+>", "", cl)
+                    c = c.replace("&nbsp;", " ").replace("&amp;", "&").strip()
+                    if c and not c.startswith("Kind:") and not c.startswith("Language:"):
+                        cleaned_lines.append(c)
 
-                if not clean or clean.startswith("Kind:") or clean.startswith("Language:"):
+                if not cleaned_lines:
                     continue
 
-                if clean == last_text:
+                # Handle YouTube rolling 2-line auto-caption window (line 0 is often previous line)
+                if len(cleaned_lines) == 2 and last_text and (cleaned_lines[0] in last_text or last_text in cleaned_lines[0]):
+                    clean = cleaned_lines[1]
+                else:
+                    clean = " ".join(cleaned_lines).strip()
+
+                if not clean or clean == last_text:
                     continue
 
                 # Estimate speaker turn if pause > 2.0s
@@ -126,10 +221,14 @@ def fetch_youtube_subtitles(
         logger.debug("yt-dlp not installed, skipping YouTube subtitles extraction.")
         return None, {}
 
+    url = clean_youtube_url(url)
+    ydl_dict, _ = get_js_runtime_config()
     ydl_opts = {
         "skip_download": True,
         "quiet": True,
         "no_warnings": True,
+        "noplaylist": True,
+        **ydl_dict,
     }
 
     try:
@@ -164,7 +263,7 @@ def fetch_youtube_subtitles(
         candidates.append(preferred_lang)
     if video_lang:
         candidates.append(video_lang)
-    candidates.extend(["en", "ja", "vi", "ko", "zh-CN", "zh-TW", "fr", "de", "es"])
+    candidates.extend(["ja", "en", "vi", "ko", "zh-CN", "zh-TW", "fr", "de", "es"])
 
     # 1. Search in official manual subtitles first
     for cand in candidates:
@@ -208,21 +307,9 @@ def fetch_youtube_subtitles(
     metadata["is_official"] = is_official
     logger.info("Selected YouTube subtitle: lang=%s, official=%s", target_lang, is_official)
 
-    # Prefer VTT format for clean sentence boundaries, then json3
-    vtt_entry = next((s for s in lang_sub_entries if s.get("ext") == "vtt"), None)
+    # Prefer json3 for discrete word timings & avoiding rolling duplicates, then vtt
     json3_entry = next((s for s in lang_sub_entries if s.get("ext") == "json3"), None)
-
-    if vtt_entry:
-        try:
-            req = urllib.request.Request(vtt_entry["url"], headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                vtt_text = resp.read().decode("utf-8", errors="replace")
-                segments = parse_vtt_subtitles(vtt_text)
-                if segments:
-                    logger.info("Parsed %d subtitle segments from YouTube VTT.", len(segments))
-                    return segments, metadata
-        except Exception as e:
-            logger.warning("Failed to fetch/parse YouTube VTT subtitles: %s", e)
+    vtt_entry = next((s for s in lang_sub_entries if s.get("ext") == "vtt"), None)
 
     if json3_entry:
         try:
@@ -231,9 +318,23 @@ def fetch_youtube_subtitles(
                 json_data = json.loads(resp.read().decode("utf-8", errors="replace"))
                 segments = parse_json3_subtitles(json_data)
                 if segments:
+                    segments = merge_sentence_segments(segments)
                     logger.info("Parsed %d subtitle segments from YouTube JSON3.", len(segments))
                     return segments, metadata
         except Exception as e:
             logger.warning("Failed to fetch/parse YouTube JSON3 subtitles: %s", e)
+
+    if vtt_entry:
+        try:
+            req = urllib.request.Request(vtt_entry["url"], headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                vtt_text = resp.read().decode("utf-8", errors="replace")
+                segments = parse_vtt_subtitles(vtt_text)
+                if segments:
+                    segments = merge_sentence_segments(segments)
+                    logger.info("Parsed %d subtitle segments from YouTube VTT.", len(segments))
+                    return segments, metadata
+        except Exception as e:
+            logger.warning("Failed to fetch/parse YouTube VTT subtitles: %s", e)
 
     return None, metadata

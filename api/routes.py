@@ -72,6 +72,8 @@ def create_router():
             if req.source_type == "youtube":
                 if not req.url:
                     raise HTTPException(status_code=400, detail="Missing YouTube URL.")
+                from ingest.youtube_downloader import clean_youtube_url
+                req.url = clean_youtube_url(req.url)
 
                 # If engine is 'youtube_sub' or 'auto', attempt extracting YouTube native subtitles first
                 if req.engine in ("youtube_sub", "auto", ""):
